@@ -963,19 +963,10 @@ impl AccountRequestProcessor {
 
         self.refresh_token_if_requested(do_refresh).await;
 
-        // Determine whether auth is required based on the active model provider.
-        // If a custom provider is configured with `requires_openai_auth == false`,
-        // then no auth step is required; otherwise, default to requiring auth.
-        let config = self.load_latest_config().await;
-        let requires_openai_auth = config.model_provider.requires_openai_auth;
-
-        let response = if !requires_openai_auth {
-            GetAuthStatusResponse {
-                auth_method: None,
-                auth_token: None,
-                requires_openai_auth: Some(false),
-            }
-        } else {
+        // Codexium Patch: always report the real auth state. Do not short-circuit
+        // on `requires_openai_auth == false`, otherwise the app would show "not logged
+        // in" even though the ChatGPT account is active.
+        let response = {
             let auth = if do_refresh {
                 self.auth_manager.auth_cached()
             } else {

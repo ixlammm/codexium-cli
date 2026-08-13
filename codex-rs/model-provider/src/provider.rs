@@ -255,7 +255,16 @@ pub type ModelProviderFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a
 pub type SharedModelProvider = Arc<dyn ModelProvider>;
 
 fn provider_uses_first_party_auth_path(provider: &ModelProviderInfo) -> bool {
+    // Codexium Patch: if a custom `base_url` is configured we treat the
+    // provider as a third-party OpenAI-compatible endpoint and never use the
+    // first-party ChatGPT account, even when `requires_openai_auth` is true
+    // for backward compatibility.
+    let has_custom_base_url = provider
+        .base_url
+        .as_deref()
+        .is_some_and(|url| !url.is_empty() && url != "https://api.openai.com/v1");
     provider.requires_openai_auth
+        && !has_custom_base_url
         && provider.env_key.is_none()
         && provider.experimental_bearer_token.is_none()
         && provider.auth.is_none()
@@ -378,7 +387,11 @@ impl ModelProvider for ConfiguredModelProvider {
                 })
                 .transpose()?
         } else {
-            None
+            // Codexium Patch: when a user has set `requires_openai_auth = false`
+            // (the default for custom providers), surface an API-key account so the
+            // runtime model lookup treats the configured provider as a normal
+            // OpenAI-compatible endpoint.
+            Some(ProviderAccount::ApiKey)
         };
 
         Ok(ProviderAccountState {

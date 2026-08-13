@@ -241,7 +241,13 @@ impl ModelProviderInfo {
     }
 
     pub fn to_api_provider(&self, auth_mode: Option<AuthMode>) -> CodexResult<ApiProvider> {
-        let default_base_url = if matches!(
+        // Codexium Patc:: a user-configured `base_url` always wins, so custom
+        // OpenAI-compatible providers (e.g. moonshot/kimi) keep their endpoint under
+        // any auth mode instead of being silently redirected at chatgpt.com.
+        let default_base_url = if self.base_url.is_some() {
+            // Use a placeholder; the `unwrap_or_else` below will pick `self.base_url`.
+            "https://api.openai.com/v1"
+        } else if matches!(
             auth_mode,
             Some(
                 AuthMode::Chatgpt

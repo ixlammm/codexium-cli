@@ -3708,7 +3708,17 @@ impl Config {
             merge_configured_model_providers(built_in_model_providers(openai_base_url), cfg.model_providers)
                 .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;
 
+        // Codexium Patch: when no `modelProvider` is given, infer it from the
+        // model id prefix so custom providers (e.g. `kimi.kimi-k3` -> `kimi`) work
+        // even when the renderer sends only the model name.
+        let model = model.or(cfg.model);
+        let inferred_model_provider = model.as_ref().and_then(|model| {
+            model
+                .split_once('.')
+                .and_then(|(provider_id, _)| model_providers.contains_key(provider_id).then(|| provider_id.to_string()))
+        });
         let model_provider_id = model_provider
+            .or(inferred_model_provider)
             .or(cfg.model_provider)
             .unwrap_or_else(|| "openai".to_string());
         let model_provider = model_providers
@@ -3845,7 +3855,6 @@ impl Config {
 
         let forced_login_method = cfg.forced_login_method;
 
-        let model = model.or(cfg.model);
         let notices = cfg.notice.unwrap_or_default();
         let service_tier = match service_tier_override {
             Some(Some(service_tier)) => Some(service_tier),
