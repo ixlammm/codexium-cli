@@ -9,7 +9,6 @@ use crate::exec::ExecExpiration;
 use crate::guardian::GUARDIAN_REVIEW_TIMEOUT;
 use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::guardian::routes_approval_to_guardian;
-use crate::plugins::metrics::sidecar_for_command;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
@@ -39,7 +38,6 @@ use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
-use codex_core_plugins::PluginMetricsSidecar;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::error::CodexErr;
@@ -47,7 +45,6 @@ use codex_protocol::error::SandboxErr;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxablePreference;
-use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_tools::UnifiedExecShellMode;
 use codex_utils_path_uri::PathUri;
@@ -104,7 +101,6 @@ pub struct UnifiedExecRuntime<'a> {
 
 pub(crate) struct UnifiedExecAttempt {
     pub(crate) process: UnifiedExecProcess,
-    pub(crate) metrics_sidecar: Option<PluginMetricsSidecar>,
 }
 
 fn unified_exec_options(
@@ -277,7 +273,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
             launch_sandbox_permissions,
         ));
         let env = exec_env_for_sandbox_permissions(&req.env, launch_sandbox_permissions);
-        let (mut env, managed_network_context, network_proxy_launch) = match managed_network {
+        let (env, managed_network_context, network_proxy_launch) = match managed_network {
             Some(network) if environment_is_remote => {
                 let mut launch = network.remote_launch_config().await.map_err(|err| {
                     ToolError::Codex(CodexErr::Io(io::Error::other(err.to_string())))
@@ -338,16 +334,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
             None => (env, None, None),
         };
         let explicit_env_overrides = req.explicit_env_overrides.clone();
-        let metrics_sidecar = sidecar_for_command(
-            ctx,
-            &req.command,
-            &req.cwd,
-            req.turn_environment.environment.as_ref(),
-        )
-        .await;
-        if let Some(sidecar) = metrics_sidecar.as_ref() {
-            sidecar.install_output_env(&mut env);
-        }
         #[cfg(unix)]
         let runtime_path_prepends = {
             let mut runtime_path_prepends = RuntimePathPrepends::default();
@@ -391,13 +377,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
         } else {
             command
         };
-        let sidecar_permissions = metrics_sidecar
-            .as_ref()
-            .map(PluginMetricsSidecar::additional_permissions);
-        let additional_permissions = merge_permission_profiles(
-            req.additional_permissions.as_ref(),
-            sidecar_permissions.as_ref(),
-        );
+        let additional_permissions = req.additional_permissions.clone();
 
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
             let command = build_unified_exec_sandbox_command(
@@ -460,10 +440,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                             }
                             other => ToolError::Rejected(other.to_string()),
                         })?;
-                    return Ok(UnifiedExecAttempt {
-                        process,
-                        metrics_sidecar,
-                    });
+                    return Ok(UnifiedExecAttempt { process });
                 }
                 None => {
                     tracing::warn!(
@@ -503,10 +480,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                 req.turn_environment.environment.as_ref(),
             )
             .await?;
-        Ok(UnifiedExecAttempt {
-            process,
-            metrics_sidecar,
-        })
+        Ok(UnifiedExecAttempt { process })
     }
 }
 

@@ -23,10 +23,10 @@ use crate::outgoing_message::RequestContext;
 use crate::request_processors::AccountRequestProcessor;
 use crate::request_processors::AppsRequestProcessor;
 use crate::request_processors::CatalogRequestProcessor;
+use crate::request_processors::CodexiumRequestProcessor;
 use crate::request_processors::CommandExecRequestProcessor;
 use crate::request_processors::ConfigRequestProcessor;
 use crate::request_processors::EnvironmentRequestProcessor;
-use crate::request_processors::FeedbackRequestProcessor;
 use crate::request_processors::FsRequestProcessor;
 use crate::request_processors::GitRequestProcessor;
 use crate::request_processors::InitializeRequestProcessor;
@@ -49,8 +49,6 @@ use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadStateManager;
 use crate::transport::AppServerTransport;
 use crate::transport::RemoteControlHandle;
-use codex_analytics::AnalyticsEventsClient;
-use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
@@ -69,7 +67,6 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ThreadStoreConfig;
 use codex_exec_server::EnvironmentManager;
-use codex_feedback::CodexFeedback;
 use codex_goal_extension::GoalService;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::AuthManager;
@@ -109,9 +106,9 @@ pub(crate) struct MessageProcessor {
     command_exec_processor: CommandExecRequestProcessor,
     process_exec_processor: ProcessExecRequestProcessor,
     config_processor: ConfigRequestProcessor,
+    codexium_processor: CodexiumRequestProcessor,
     environment_processor: EnvironmentRequestProcessor,
     external_agent_config_processor: ExternalAgentConfigRequestProcessor,
-    feedback_processor: FeedbackRequestProcessor,
     fs_processor: FsRequestProcessor,
     git_processor: GitRequestProcessor,
     initialize_processor: InitializeRequestProcessor,
@@ -205,12 +202,10 @@ impl ConnectionSessionState {
 
 pub(crate) struct MessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
-    pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
     pub(crate) config_manager: ConfigManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
-    pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
@@ -218,7 +213,6 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) installation_id: String,
     pub(crate) code_mode_session_provider: Option<Arc<dyn CodeModeSessionProvider>>,
-    pub(crate) rpc_transport: AppServerRpcTransport,
     pub(crate) remote_control_handle: Option<RemoteControlHandle>,
     pub(crate) plugin_startup_tasks: crate::PluginStartupTasks,
 }
@@ -229,12 +223,10 @@ impl MessageProcessor {
     pub(crate) fn new(args: MessageProcessorArgs) -> Self {
         let MessageProcessorArgs {
             outgoing,
-            analytics_events_client,
             arg0_paths,
             config,
             config_manager,
             environment_manager,
-            feedback,
             log_db,
             state_db,
             config_warnings,
@@ -242,7 +234,6 @@ impl MessageProcessor {
             auth_manager,
             installation_id,
             code_mode_session_provider,
-            rpc_transport,
             remote_control_handle,
             plugin_startup_tasks,
         } = args;
@@ -286,7 +277,6 @@ impl MessageProcessor {
                         ),
                         auth_manager: auth_manager.clone(),
                         state_db: state_db.clone(),
-                        analytics_events_client: analytics_events_client.clone(),
                         thread_manager: thread_manager.clone(),
                         goal_service: Arc::clone(&goal_service),
                         environment_manager: Arc::clone(&environment_manager_for_extensions),
@@ -299,7 +289,6 @@ impl MessageProcessor {
                 Arc::new(CodexHomeUserInstructionsProvider::new(
                     config.codex_home.clone(),
                 )),
-                Some(analytics_events_client.clone()),
                 Arc::clone(&thread_store),
                 codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
                 installation_id,
@@ -320,9 +309,6 @@ impl MessageProcessor {
         let models_manager = thread_manager.get_models_manager();
         let models_refresh_worker =
             crate::models_refresh_worker::spawn(&models_manager, config.http_client_factory());
-        thread_manager
-            .plugins_manager()
-            .set_analytics_events_client(analytics_events_client.clone());
         let skills_watcher = SkillsWatcher::new(
             thread_manager.skills_service(),
             &config.codex_home,
@@ -341,8 +327,8 @@ impl MessageProcessor {
             outgoing.clone(),
             config_manager.clone(),
             thread_manager.clone(),
-            analytics_events_client.clone(),
         );
+        let codexium_processor = CodexiumRequestProcessor::new(config.codex_home.to_path_buf());
         let on_effective_plugins_changed =
             crate::effective_plugin_change::effective_plugins_changed_callback(
                 auth_manager.clone(),
@@ -386,21 +372,11 @@ impl MessageProcessor {
             outgoing.clone(),
             Arc::clone(&environment_manager_for_requests),
         );
-        let feedback_processor = FeedbackRequestProcessor::new(
-            auth_manager.clone(),
-            Arc::clone(&thread_manager),
-            Arc::clone(&config),
-            feedback,
-            log_db.clone(),
-            state_db.clone(),
-        );
         let git_processor = GitRequestProcessor::new();
         let initialize_processor = InitializeRequestProcessor::new(
             outgoing.clone(),
-            analytics_events_client.clone(),
             Arc::clone(&config),
             config_warnings.clone(),
-            rpc_transport,
         );
         let marketplace_processor = MarketplaceRequestProcessor::new(
             Arc::clone(&config),
@@ -417,7 +393,6 @@ impl MessageProcessor {
             auth_manager.clone(),
             Arc::clone(&thread_manager),
             outgoing.clone(),
-            analytics_events_client.clone(),
             config_manager.clone(),
             workspace_settings_cache,
             on_effective_plugins_changed,
@@ -454,7 +429,6 @@ impl MessageProcessor {
             auth_manager.clone(),
             Arc::clone(&thread_manager),
             outgoing.clone(),
-            analytics_events_client.clone(),
             arg0_paths.clone(),
             Arc::clone(&config),
             config_manager.clone(),
@@ -484,7 +458,6 @@ impl MessageProcessor {
                 config_manager: config_manager.clone(),
                 config_processor: config_processor.clone(),
                 state_db,
-                analytics_events_client,
                 arg0_paths,
                 codex_home: config.codex_home.to_path_buf(),
             });
@@ -510,9 +483,9 @@ impl MessageProcessor {
             command_exec_processor,
             process_exec_processor,
             config_processor,
+            codexium_processor,
             environment_processor,
             external_agent_config_processor,
-            feedback_processor,
             fs_processor,
             git_processor,
             initialize_processor,
@@ -834,11 +807,6 @@ impl MessageProcessor {
             return Err(invalid_request(experimental_required_message(reason)));
         }
         let connection_id = connection_request_id.connection_id;
-        self.initialize_processor.track_initialized_request(
-            connection_id,
-            connection_request_id.request_id.clone(),
-            &codex_request,
-        );
 
         let serialization_scope = codex_request.serialization_scope();
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
@@ -905,6 +873,36 @@ impl MessageProcessor {
             ClientRequest::ConfigRead { params, .. } => self
                 .config_processor
                 .read(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::CodexiumModelsRead { params, .. } => self
+                .codexium_processor
+                .models_read(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::CodexiumModelsWrite { params, .. } => self
+                .codexium_processor
+                .models_write(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::CodexiumRegistryRead { .. } => self
+                .codexium_processor
+                .registry_read()
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::CodexiumProvidersConnect { params, .. } => self
+                .codexium_processor
+                .providers_connect(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::CodexiumProvidersDisconnect { params, .. } => self
+                .codexium_processor
+                .providers_disconnect(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::CodexiumProvidersCheck { params, .. } => self
+                .codexium_processor
+                .providers_check(params)
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::WindowsSandboxReadiness { .. } => self
@@ -1483,9 +1481,6 @@ impl MessageProcessor {
                     .process_resize_pty(request_id.clone(), params)
                     .await
             }
-            ClientRequest::FeedbackUpload { params, .. } => {
-                self.feedback_processor.feedback_upload(params).await
-            }
         };
 
         match result {
@@ -1502,7 +1497,3 @@ impl MessageProcessor {
         Ok(())
     }
 }
-
-#[cfg(test)]
-#[path = "message_processor_tracing_tests.rs"]
-mod message_processor_tracing_tests;

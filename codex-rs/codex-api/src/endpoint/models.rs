@@ -3,13 +3,11 @@ use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use codex_client::HttpTransport;
-use codex_client::RequestTelemetry;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
 use http::Method;
 use http::header::ETAG;
-use std::sync::Arc;
 
 pub struct ModelsClient<T: HttpTransport> {
     session: EndpointSession<T>,
@@ -19,12 +17,6 @@ impl<T: HttpTransport> ModelsClient<T> {
     pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
-        }
-    }
-
-    pub fn with_telemetry(self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
-        Self {
-            session: self.session.with_request_telemetry(request),
         }
     }
 

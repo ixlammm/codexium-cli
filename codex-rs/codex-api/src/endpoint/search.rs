@@ -5,11 +5,9 @@ use crate::provider::Provider;
 use crate::search::SearchRequest;
 use crate::search::SearchResponse;
 use codex_client::HttpTransport;
-use codex_client::RequestTelemetry;
 use http::HeaderMap;
 use http::Method;
 use serde_json::to_value;
-use std::sync::Arc;
 
 pub struct SearchClient<T: HttpTransport> {
     session: EndpointSession<T>,
@@ -19,12 +17,6 @@ impl<T: HttpTransport> SearchClient<T> {
     pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
-        }
-    }
-
-    pub fn with_telemetry(self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
-        Self {
-            session: self.session.with_request_telemetry(request),
         }
     }
 
@@ -76,6 +68,7 @@ mod tests {
     use http::StatusCode;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::sync::Arc;
     use std::sync::Mutex;
     use std::time::Duration;
 

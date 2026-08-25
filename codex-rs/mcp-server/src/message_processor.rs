@@ -81,10 +81,9 @@ impl MessageProcessor {
         );
         let skill_providers = codex_skills_extension::SkillProviders::new()
             .with_host_provider(Arc::new(codex_skills_extension::HostSkillProvider::new()));
-        codex_skills_extension::install_with_providers_and_metrics(
+        codex_skills_extension::install_with_providers(
             &mut extensions,
             skill_providers,
-            codex_otel::global(),
             |config: &Config| codex_skills_extension::SkillsExtensionConfig {
                 include_instructions: config.include_skill_instructions,
                 bundled_skills_enabled: config.bundled_skills_enabled(),
@@ -103,7 +102,6 @@ impl MessageProcessor {
             environment_manager,
             Arc::new(extensions.build()),
             user_instructions_provider,
-            /*analytics_events_client*/ None,
             codex_core::thread_store_from_config(config.as_ref(), state_db.clone()),
             codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
             installation_id,

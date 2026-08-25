@@ -8,9 +8,6 @@ use crate::backend::BundleRequestError;
 use crate::backend::RetryableFailureKind;
 use crate::cache::CacheLoadStatus;
 use crate::cache::CloudConfigBundleCache;
-use crate::metrics::emit_fetch_attempt_metric;
-use crate::metrics::emit_fetch_final_metric;
-use crate::metrics::emit_load_metric;
 use crate::validation::validate_bundle;
 use codex_config::AbsolutePathBuf;
 use codex_config::CloudConfigBundle;
@@ -116,8 +113,6 @@ where
     pub(crate) async fn load_startup_bundle_with_timeout(
         &self,
     ) -> Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError> {
-        let _timer =
-            codex_otel::start_global_timer("codex.cloud_config_bundle.fetch.duration_ms", &[]);
         let started_at = Instant::now();
         let load_result = timeout(self.timeout, self.load_startup_bundle())
             .await
@@ -127,7 +122,6 @@ where
                     self.timeout.as_secs()
                 );
                 tracing::error!("{message}");
-                emit_load_metric("startup", "error", /*bundle*/ None);
             })
             .map_err(|_| {
                 CloudConfigBundleLoadError::new(
@@ -143,7 +137,6 @@ where
         let result = match load_result {
             Ok(result) => result,
             Err(err) => {
-                emit_load_metric("startup", "error", /*bundle*/ None);
                 return Err(err);
             }
         };
@@ -156,14 +149,12 @@ where
                     requirements_fragments = bundle.requirements_toml.enterprise_managed.len(),
                     "Cloud config bundle load completed"
                 );
-                emit_load_metric("startup", "success", Some(bundle));
             }
             None => {
                 tracing::info!(
                     elapsed_ms = started_at.elapsed().as_millis(),
                     "Cloud config bundle load completed (none)"
                 );
-                emit_load_metric("startup", "success", /*bundle*/ None);
             }
         }
 
@@ -280,14 +271,6 @@ where
             break;
         }
 
-        emit_fetch_final_metric(
-            trigger,
-            "error",
-            "request_retry_exhausted",
-            CLOUD_CONFIG_BUNDLE_MAX_ATTEMPTS,
-            last_status_code,
-            /*bundle*/ None,
-        );
         tracing::error!(
             path = %self.cache.path().display(),
             "{CLOUD_CONFIG_BUNDLE_LOAD_FAILED_MESSAGE}"
@@ -306,16 +289,7 @@ where
         attempt: usize,
         bundle: CloudConfigBundle,
     ) -> Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError> {
-        emit_fetch_attempt_metric(trigger, attempt, "success", /*status_code*/ None);
         if let Err(err) = validate_bundle(&bundle, &self.codex_home) {
-            emit_fetch_final_metric(
-                trigger,
-                "error",
-                "invalid_bundle",
-                attempt,
-                /*status_code*/ None,
-                /*bundle*/ None,
-            );
             return Err(err);
         }
 
@@ -331,14 +305,6 @@ where
             );
         }
 
-        emit_fetch_final_metric(
-            trigger,
-            "success",
-            "none",
-            attempt,
-            /*status_code*/ None,
-            Some(&bundle),
-        );
         Ok(optional_bundle(bundle))
     }
 
@@ -349,7 +315,6 @@ where
         status: RetryableFailureKind,
     ) -> bool {
         let status_code = status.status_code();
-        emit_fetch_attempt_metric(trigger, attempt, "error", status_code);
         if attempt < CLOUD_CONFIG_BUNDLE_MAX_ATTEMPTS {
             tracing::warn!(
                 status = ?status,
@@ -373,7 +338,6 @@ where
         status_code: Option<u16>,
         message: &str,
     ) -> Result<UnauthorizedRecoveryAction, CloudConfigBundleLoadError> {
-        emit_fetch_attempt_metric(trigger, attempt, "unauthorized", status_code);
         if auth_recovery.has_next() {
             tracing::warn!(
                 attempt,
@@ -385,14 +349,6 @@ where
                     let Some(refreshed_auth) = self.auth_manager.auth().await else {
                         tracing::error!(
                             "Auth recovery succeeded but no auth is available for cloud config bundle"
-                        );
-                        emit_fetch_final_metric(
-                            trigger,
-                            "error",
-                            "auth_recovery_missing_auth",
-                            attempt,
-                            status_code,
-                            /*bundle*/ None,
                         );
                         return Err(CloudConfigBundleLoadError::new(
                             CloudConfigBundleLoadErrorCode::Auth,
@@ -407,14 +363,6 @@ where
                     tracing::warn!(
                         error = %failed,
                         "Failed to recover from unauthorized cloud config bundle request"
-                    );
-                    emit_fetch_final_metric(
-                        trigger,
-                        "error",
-                        "auth_recovery_unrecoverable",
-                        attempt,
-                        status_code,
-                        /*bundle*/ None,
                     );
                     return Err(CloudConfigBundleLoadError::new(
                         CloudConfigBundleLoadErrorCode::Auth,
@@ -441,14 +389,6 @@ where
             error = %message,
             "Cloud config bundle request was unauthorized and no auth recovery is available"
         );
-        emit_fetch_final_metric(
-            trigger,
-            "error",
-            "auth_recovery_unavailable",
-            attempt,
-            status_code,
-            /*bundle*/ None,
-        );
         Err(CloudConfigBundleLoadError::new(
             CloudConfigBundleLoadErrorCode::Auth,
             status_code,
@@ -466,7 +406,6 @@ where
                     tracing::error!(
                         "Timed out refreshing cloud config bundle cache from remote; keeping existing cache"
                     );
-                    emit_load_metric("refresh", "error", /*bundle*/ None);
                 }
             }
         }
@@ -485,7 +424,6 @@ where
             .await
         {
             Ok(bundle) => {
-                emit_load_metric("refresh", "success", bundle.as_ref());
                 if let Some(latest_bundle) = self.latest_bundle.get() {
                     *latest_bundle.lock().await = Ok(bundle);
                 }
@@ -496,7 +434,6 @@ where
                     error = %err,
                     "Failed to refresh cloud config bundle cache from remote"
                 );
-                emit_load_metric("refresh", "error", /*bundle*/ None);
                 if let Some(latest_bundle) = self.latest_bundle.get() {
                     let mut latest_bundle = latest_bundle.lock().await;
                     if latest_bundle.is_err() {

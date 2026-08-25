@@ -94,13 +94,11 @@ impl Session {
         }
 
         let mut annotated_items = Vec::with_capacity(items.len());
-        let mut image_preparations = Vec::new();
         for envelope in items {
-            let (prepared_items, prepared_images) = self.prepare_conversation_items_for_history(
+            let prepared_items = self.prepare_conversation_items_for_history(
                 turn_context,
                 std::slice::from_ref(&envelope.item),
             );
-            image_preparations.extend(prepared_images);
 
             let mut metadata = envelope.metadata;
             annotated_items.extend(prepared_items.into_owned().into_iter().map(|item| {
@@ -110,7 +108,7 @@ impl Session {
                 }
             }));
         }
-        self.record_prepared_conversation_items(turn_context, annotated_items, image_preparations)
+        self.record_prepared_conversation_items(turn_context, annotated_items)
             .await;
     }
 

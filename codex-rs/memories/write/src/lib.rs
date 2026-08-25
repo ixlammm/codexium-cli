@@ -7,7 +7,6 @@
 mod control;
 mod extensions;
 mod guard;
-mod metrics;
 mod phase1;
 mod phase2;
 mod prompts;

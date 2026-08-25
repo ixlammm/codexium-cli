@@ -230,7 +230,6 @@ async fn start_or_steer(
             session
                 .maybe_emit_model_warnings_for_turn(turn_context.as_ref())
                 .await;
-            turn_context.session_telemetry.user_prompt(&items);
             let mut task_input = merge_additional_context_input(session, additional_context).await;
             if !items.is_empty() {
                 task_input.push(TurnInput::UserInput {
@@ -343,9 +342,6 @@ async fn start_if_idle(
     let mut task_input = merge_additional_context_input(session, additional_context).await;
     if has_user_input {
         session.clear_connector_selection().await;
-        if let SubmittedTurnInput::UserInput { content, .. } = &input {
-            turn_context.session_telemetry.user_prompt(content);
-        }
         task_input.push(pending_turn_input(input));
     } else if is_automatic_idle_work {
         // Recovery resumes an existing turn, so it must not queue a new empty
@@ -529,10 +525,6 @@ impl Session {
         {
             return Err(NotSubmittedReason::ActiveTurnOutputSchemaMismatch);
         }
-        active_task
-            .turn_context
-            .session_telemetry
-            .user_prompt(input);
 
         let mut pending_input = merge_additional_context_input(self, additional_context).await;
 

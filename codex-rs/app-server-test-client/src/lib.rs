@@ -68,19 +68,11 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_core::config::Config;
-use codex_otel::OtelProvider;
-use codex_otel::current_span_w3c_trace_context;
 use codex_protocol::dynamic_tools::normalize_dynamic_tool_specs;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::W3cTraceContext;
-use codex_utils_cli::CliConfigOverrides;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use tracing::info_span;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 use tungstenite::Message;
 use tungstenite::WebSocket;
 use tungstenite::connect;
@@ -88,10 +80,7 @@ use tungstenite::stream::MaybeTlsStream;
 use url::Url;
 use uuid::Uuid;
 
-mod loopback_responses_server;
-mod plugin_analytics_capture;
-mod plugin_analytics_mutation_smoke;
-mod plugin_analytics_smoke;
+mod plugin_remote_uninstall;
 mod request_user_input;
 
 const NOTIFICATIONS_TO_OPT_OUT: &[&str] = &[
@@ -105,10 +94,6 @@ const NOTIFICATIONS_TO_OPT_OUT: &[&str] = &[
 ];
 const APP_SERVER_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const APP_SERVER_GRACEFUL_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const DEFAULT_ANALYTICS_ENABLED: bool = true;
-const OTEL_SERVICE_NAME: &str = "codex-app-server-test-client";
-const TRACE_DISABLED_MESSAGE: &str =
-    "Not enabled - enable tracing in $CODEX_HOME/config.toml to get a trace URL!";
 
 /// Minimal launcher that initializes the Codex app-server and logs the handshake.
 #[derive(Parser)]
@@ -289,29 +274,6 @@ enum CliCommand {
         /// Seconds the helper script should sleep while the timeout is paused.
         #[arg(long, default_value_t = 15)]
         hold_seconds: u64,
-    },
-    /// Exercise remote plugin analytics through production app-server RPC paths.
-    #[command(name = "plugin-analytics-smoke")]
-    PluginAnalyticsSmoke {
-        /// Installed local plugin id, such as `linear@openai-curated-remote`.
-        #[arg(long)]
-        plugin_id: String,
-        /// JSONL output path. Defaults to a PID-specific file under the system temp directory.
-        #[arg(long)]
-        capture_file: Option<PathBuf>,
-    },
-    /// Install and uninstall one remote plugin while validating analytics capture.
-    #[command(name = "plugin-analytics-mutation-smoke")]
-    PluginAnalyticsMutationSmoke {
-        /// Backend remote plugin id. The plugin must be initially uninstalled.
-        #[arg(long)]
-        remote_plugin_id: String,
-        /// Acknowledge that this command mutates the active account's plugin state.
-        #[arg(long)]
-        confirm_account_mutation: bool,
-        /// JSONL output path. Defaults to a PID-specific file under the system temp directory.
-        #[arg(long)]
-        capture_file: Option<PathBuf>,
     },
     /// Best-effort recovery command that uninstalls one remote plugin.
     #[command(name = "plugin-remote-uninstall")]
@@ -499,40 +461,6 @@ pub async fn run() -> Result<()> {
                 hold_seconds,
             )
         }
-        CliCommand::PluginAnalyticsSmoke {
-            plugin_id,
-            capture_file,
-        } => {
-            ensure_dynamic_tools_unused(&dynamic_tools, "plugin-analytics-smoke")?;
-            if url.is_some() {
-                bail!("plugin-analytics-smoke requires --codex-bin and does not support --url");
-            }
-            let codex_bin = codex_bin.context("plugin-analytics-smoke requires --codex-bin")?;
-            plugin_analytics_smoke::run(&codex_bin, &config_overrides, &plugin_id, capture_file)
-        }
-        CliCommand::PluginAnalyticsMutationSmoke {
-            remote_plugin_id,
-            confirm_account_mutation,
-            capture_file,
-        } => {
-            ensure_dynamic_tools_unused(&dynamic_tools, "plugin-analytics-mutation-smoke")?;
-            if url.is_some() {
-                bail!(
-                    "plugin-analytics-mutation-smoke requires --codex-bin and does not support --url"
-                );
-            }
-            let codex_bin =
-                codex_bin.context("plugin-analytics-mutation-smoke requires --codex-bin")?;
-            plugin_analytics_mutation_smoke::run(
-                &codex_bin,
-                &config_overrides,
-                &remote_plugin_id,
-                plugin_analytics_mutation_smoke::AccountMutationConfirmation::from_flag(
-                    confirm_account_mutation,
-                ),
-                capture_file,
-            )
-        }
         CliCommand::PluginRemoteUninstall {
             remote_plugin_id,
             confirm_account_mutation,
@@ -542,11 +470,11 @@ pub async fn run() -> Result<()> {
                 bail!("plugin-remote-uninstall requires --codex-bin and does not support --url");
             }
             let codex_bin = codex_bin.context("plugin-remote-uninstall requires --codex-bin")?;
-            plugin_analytics_mutation_smoke::run_cleanup(
+            plugin_remote_uninstall::run_cleanup(
                 &codex_bin,
                 &config_overrides,
                 &remote_plugin_id,
-                plugin_analytics_mutation_smoke::AccountMutationConfirmation::from_flag(
+                plugin_remote_uninstall::AccountMutationConfirmation::from_flag(
                     confirm_account_mutation,
                 ),
             )
@@ -1323,25 +1251,13 @@ async fn thread_list(endpoint: &Endpoint, config_overrides: &[String], limit: u3
 }
 
 async fn with_client<T>(
-    command_name: &'static str,
+    _command_name: &'static str,
     endpoint: &Endpoint,
     config_overrides: &[String],
     f: impl FnOnce(&mut CodexClient) -> Result<T>,
 ) -> Result<T> {
-    let tracing = TestClientTracing::initialize(config_overrides).await?;
-    let command_span = info_span!(
-        "app_server_test_client.command",
-        otel.kind = "client",
-        otel.name = command_name,
-        app_server_test_client.command = command_name,
-    );
-    let trace_summary = command_span.in_scope(|| TraceSummary::capture(tracing.traces_enabled));
-    let result = command_span.in_scope(|| {
-        let mut client = CodexClient::connect(endpoint, config_overrides)?;
-        f(&mut client)
-    });
-    print_trace_summary(&trace_summary);
-    result
+    let mut client = CodexClient::connect(endpoint, config_overrides)?;
+    f(&mut client)
 }
 
 fn thread_increment_elicitation(url: &str, thread_id: String) -> Result<()> {
@@ -2035,25 +1951,14 @@ impl CodexClient {
     where
         T: DeserializeOwned,
     {
-        let request_span = info_span!(
-            "app_server_test_client.request",
-            otel.kind = "client",
-            otel.name = method,
-            rpc.system = "jsonrpc",
-            rpc.method = method,
-            rpc.request_id = ?request_id,
-        );
-        request_span.in_scope(|| {
-            self.write_request(&request)?;
-            self.wait_for_response(request_id, method)
-        })
+        self.write_request(&request)?;
+        self.wait_for_response(request_id, method)
     }
 
     fn write_request(&mut self, request: &ClientRequest) -> Result<()> {
         let request_value = serde_json::to_value(request)?;
-        let mut request: JSONRPCRequest = serde_json::from_value(request_value)
+        let request: JSONRPCRequest = serde_json::from_value(request_value)
             .context("client request was not a valid JSON-RPC request")?;
-        request.trace = current_span_w3c_trace_context();
         let request_json = serde_json::to_string(&request)?;
         let mut request_for_logging = serde_json::to_value(&request)?;
         if request.method == "account/login/start"
@@ -2344,85 +2249,6 @@ impl CodexClient {
 fn print_multiline_with_prefix(prefix: &str, payload: &str) {
     for line in payload.lines() {
         println!("{prefix}{line}");
-    }
-}
-
-struct TestClientTracing {
-    _otel_provider: Option<OtelProvider>,
-    traces_enabled: bool,
-}
-
-impl TestClientTracing {
-    async fn initialize(config_overrides: &[String]) -> Result<Self> {
-        let cli_kv_overrides = CliConfigOverrides {
-            raw_overrides: config_overrides.to_vec(),
-        }
-        .parse_overrides()
-        .map_err(|e| anyhow::anyhow!("error parsing -c overrides: {e}"))?;
-        let config = Config::load_with_cli_overrides(cli_kv_overrides)
-            .await
-            .context("error loading config")?;
-        let otel_provider = codex_core::otel_init::build_provider(
-            &config,
-            env!("CARGO_PKG_VERSION"),
-            Some(OTEL_SERVICE_NAME),
-            DEFAULT_ANALYTICS_ENABLED,
-        )
-        .map_err(|e| anyhow::anyhow!("error loading otel config: {e}"))?;
-        let traces_enabled = otel_provider
-            .as_ref()
-            .and_then(|provider| provider.tracer_provider.as_ref())
-            .is_some();
-        if let Some(provider) = otel_provider.as_ref()
-            && traces_enabled
-        {
-            let _ = tracing_subscriber::registry()
-                .with(provider.tracing_layer())
-                .try_init();
-        }
-        Ok(Self {
-            traces_enabled,
-            _otel_provider: otel_provider,
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum TraceSummary {
-    Enabled { url: String },
-    Disabled,
-}
-
-impl TraceSummary {
-    fn capture(traces_enabled: bool) -> Self {
-        if !traces_enabled {
-            return Self::Disabled;
-        }
-        current_span_w3c_trace_context()
-            .as_ref()
-            .and_then(trace_url_from_context)
-            .map_or(Self::Disabled, |url| Self::Enabled { url })
-    }
-}
-
-fn trace_url_from_context(trace: &W3cTraceContext) -> Option<String> {
-    let traceparent = trace.traceparent.as_deref()?;
-    let mut parts = traceparent.split('-');
-    match (parts.next(), parts.next(), parts.next(), parts.next()) {
-        (Some(_version), Some(trace_id), Some(_span_id), Some(_trace_flags))
-            if trace_id.len() == 32 =>
-        {
-            Some(format!("go/trace/{trace_id}"))
-        }
-        _ => None,
-    }
-}
-
-fn print_trace_summary(trace_summary: &TraceSummary) {
-    println!("\n[Datadog trace]");
-    match trace_summary {
-        TraceSummary::Enabled { url } => println!("{url}\n"),
-        TraceSummary::Disabled => println!("{TRACE_DISABLED_MESSAGE}\n"),
     }
 }
 

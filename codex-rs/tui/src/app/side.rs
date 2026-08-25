@@ -676,11 +676,6 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
 
-        self.session_telemetry.counter(
-            "codex.thread.side",
-            /*inc*/ 1,
-            &[("source", "slash_command")],
-        );
         self.refresh_in_memory_config_from_disk_best_effort("starting a side conversation")
             .await;
 

@@ -98,7 +98,6 @@ mod multi_agent_resume;
 mod multi_exec_server_sandbox;
 mod network_approval;
 mod openai_file_mcp;
-mod otel;
 mod override_updates;
 mod pending_input;
 mod permissions_messages;

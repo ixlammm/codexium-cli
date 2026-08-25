@@ -14,7 +14,6 @@ use crate::model::ExternalAgentConfigDetectOptions;
 use crate::model::ExternalAgentConfigMigrationItem;
 use crate::model::ExternalAgentConfigMigrationItemType;
 use crate::model::MigrationDetails;
-use crate::reporting::emit_migration_metric;
 use crate::scope::MigrationScope;
 use crate::service::ExternalAgentConfigService;
 use crate::service::configured_marketplace_plugins;
@@ -61,11 +60,6 @@ impl ExternalAgentConfigService {
             && let Some(item) = memory::detect(&self.codex_home, &self.external_agent_home)?
         {
             items.push(item);
-            emit_migration_metric(
-                EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
-                ExternalAgentConfigMigrationItemType::Memory,
-                /*skills_count*/ None,
-            );
         }
 
         Ok(items)
@@ -111,11 +105,6 @@ impl ExternalAgentConfigService {
                         cwd: cwd.clone(),
                         details: None,
                     });
-                    emit_migration_metric(
-                        EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
-                        ExternalAgentConfigMigrationItemType::Config,
-                        /*skills_count*/ None,
-                    );
                 }
             }
         }
@@ -152,11 +141,6 @@ impl ExternalAgentConfigService {
                         ..Default::default()
                     }),
                 });
-                emit_migration_metric(
-                    EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
-                    ExternalAgentConfigMigrationItemType::McpServerConfig,
-                    /*skills_count*/ None,
-                );
             }
         }
 
@@ -182,11 +166,6 @@ impl ExternalAgentConfigService {
                     ..Default::default()
                 }),
             });
-            emit_migration_metric(
-                EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
-                ExternalAgentConfigMigrationItemType::Hooks,
-                /*skills_count*/ None,
-            );
         }
 
         let source_skills = self
@@ -224,11 +203,6 @@ impl ExternalAgentConfigService {
                     ..Default::default()
                 }),
             });
-            emit_migration_metric(
-                EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
-                ExternalAgentConfigMigrationItemType::Skills,
-                Some(skills_count),
-            );
         }
 
         let source_commands = source_external_agent_dir.join("commands");
@@ -256,11 +230,6 @@ impl ExternalAgentConfigService {
                     ..Default::default()
                 }),
             });
-            emit_migration_metric(
-                EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
-                ExternalAgentConfigMigrationItemType::Commands,
-                Some(commands_count),
-            );
         }
 
         let source_subagents = source_external_agent_dir.join("agents");
@@ -284,11 +253,6 @@ impl ExternalAgentConfigService {
                     ..Default::default()
                 }),
             });
-            emit_migration_metric(
-                EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
-                ExternalAgentConfigMigrationItemType::Subagents,
-                Some(subagents_count),
-            );
         }
 
         let instruction_source_groups = if let Some(repo_root) = repo_root {
@@ -319,11 +283,6 @@ impl ExternalAgentConfigService {
                 cwd: item_cwd,
                 details: None,
             });
-            emit_migration_metric(
-                EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
-                ExternalAgentConfigMigrationItemType::AgentsMd,
-                /*skills_count*/ None,
-            );
         }
 
         if self.source.supports_plugin_migration(settings.as_ref()) {
@@ -365,11 +324,6 @@ impl ExternalAgentConfigService {
                             configured_marketplace_plugins: &configured_marketplace_plugins,
                         })?
                     {
-                        emit_migration_metric(
-                            EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
-                            ExternalAgentConfigMigrationItemType::Plugins,
-                            /*skills_count*/ None,
-                        );
                         items.push(ExternalAgentConfigMigrationItem {
                             item_type: ExternalAgentConfigMigrationItemType::Plugins,
                             description: detected.description,
@@ -407,11 +361,6 @@ impl ExternalAgentConfigService {
                         ..Default::default()
                     }),
                 });
-                emit_migration_metric(
-                    EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
-                    ExternalAgentConfigMigrationItemType::Sessions,
-                    /*skills_count*/ None,
-                );
             }
         }
 

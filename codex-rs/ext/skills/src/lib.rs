@@ -28,7 +28,6 @@ mod world_state_catalogs;
 pub use config::SkillsExtensionConfig;
 pub use extension::install;
 pub use extension::install_with_providers;
-pub use extension::install_with_providers_and_metrics;
 pub use host_outcome::SkillLoadOutcome;
 pub use host_prompt::HostSkillPrompts;
 pub use host_prompt::InjectedHostSkillPrompts;

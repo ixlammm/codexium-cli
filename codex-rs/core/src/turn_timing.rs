@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+﻿use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -6,38 +6,19 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use codex_analytics::TurnProfile;
-use codex_otel::TURN_TTFM_DURATION_METRIC;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::ResponseItem;
 use tokio::sync::Mutex;
 
-use crate::ResponseEvent;
-use crate::session::turn_context::TurnContext;
-use crate::stream_events_utils::raw_assistant_output_text_from_item;
-
-pub(crate) async fn record_turn_ttft_metric(turn_context: &TurnContext, event: &ResponseEvent) {
-    let Some(duration) = turn_context
-        .turn_timing_state
-        .record_ttft_for_response_event(event)
-        .await
-    else {
-        return;
-    };
-    turn_context.session_telemetry.record_turn_ttft(duration);
-}
-
-pub(crate) async fn record_turn_ttfm_metric(turn_context: &TurnContext, item: &TurnItem) {
-    let Some(duration) = turn_context
-        .turn_timing_state
-        .record_ttfm_for_turn_item(item)
-        .await
-    else {
-        return;
-    };
-    turn_context
-        .session_telemetry
-        .record_duration(TURN_TTFM_DURATION_METRIC, duration, &[]);
+/// Classified wall-clock time spent in each phase of a turn.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TurnProfile {
+    pub(crate) before_first_sampling_ms: u64,
+    pub(crate) sampling_ms: u64,
+    pub(crate) compaction_ms: u64,
+    pub(crate) between_sampling_overhead_ms: u64,
+    pub(crate) tool_blocking_ms: u64,
+    pub(crate) after_last_sampling_ms: u64,
+    pub(crate) sampling_request_count: u32,
+    pub(crate) sampling_retry_count: u32,
 }
 
 #[derive(Debug, Default)]
@@ -51,8 +32,6 @@ struct TurnTimingStateInner {
     started_at: Option<Instant>,
     started_at_unix_secs: Option<i64>,
     item_started_at_ms: HashMap<String, i64>,
-    first_token_at: Option<Instant>,
-    first_message_at: Option<Instant>,
 }
 
 #[derive(Debug, Default)]
@@ -93,8 +72,6 @@ impl TurnTimingState {
         state.started_at = Some(started_at);
         state.started_at_unix_secs = Some(started_at_unix_ms / 1000);
         state.item_started_at_ms.clear();
-        state.first_token_at = None;
-        state.first_message_at = None;
         self.profile_state().start(started_at);
         started_at_unix_ms
     }
@@ -135,13 +112,6 @@ impl TurnTimingState {
         (completed_at, duration_ms, profile)
     }
 
-    pub(crate) async fn time_to_first_token_ms(&self) -> Option<i64> {
-        let state = self.state.lock().await;
-        state
-            .time_to_first_token()
-            .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
-    }
-
     pub(crate) fn begin_sampling(self: &Arc<Self>) -> TurnProfileTimingGuard {
         let active = self.profile_state().begin_sampling(Instant::now());
         TurnProfileTimingGuard {
@@ -171,25 +141,6 @@ impl TurnTimingState {
             phase: TurnProfilePhase::ToolBlocking,
             active,
         }
-    }
-
-    pub(crate) async fn record_ttft_for_response_event(
-        &self,
-        event: &ResponseEvent,
-    ) -> Option<Duration> {
-        if !response_event_records_turn_ttft(event) {
-            return None;
-        }
-        let mut state = self.state.lock().await;
-        state.record_turn_ttft()
-    }
-
-    pub(crate) async fn record_ttfm_for_turn_item(&self, item: &TurnItem) -> Option<Duration> {
-        if !matches!(item, TurnItem::AgentMessage(_)) {
-            return None;
-        }
-        let mut state = self.state.lock().await;
-        state.record_turn_ttfm()
     }
 
     fn profile_state(&self) -> std::sync::MutexGuard<'_, TurnProfileState> {
@@ -348,93 +299,6 @@ impl TurnProfileState {
         self.active_phase = None;
         self.completed_profile = Some(profile.clone());
         profile
-    }
-}
-
-impl TurnTimingStateInner {
-    fn time_to_first_token(&self) -> Option<Duration> {
-        Some(self.first_token_at?.duration_since(self.started_at?))
-    }
-
-    fn record_turn_ttft(&mut self) -> Option<Duration> {
-        if self.first_token_at.is_some() {
-            return None;
-        }
-        self.started_at?;
-        self.first_token_at = Some(Instant::now());
-        self.time_to_first_token()
-    }
-
-    fn record_turn_ttfm(&mut self) -> Option<Duration> {
-        if self.first_message_at.is_some() {
-            return None;
-        }
-        let started_at = self.started_at?;
-        let first_message_at = Instant::now();
-        self.first_message_at = Some(first_message_at);
-        Some(first_message_at.duration_since(started_at))
-    }
-}
-
-fn response_event_records_turn_ttft(event: &ResponseEvent) -> bool {
-    match event {
-        ResponseEvent::OutputItemDone(item) | ResponseEvent::OutputItemAdded(item) => {
-            response_item_records_turn_ttft(item)
-        }
-        ResponseEvent::OutputTextDelta(_)
-        | ResponseEvent::ReasoningSummaryDelta { .. }
-        | ResponseEvent::ReasoningSummaryDone { .. }
-        | ResponseEvent::ReasoningContentDelta { .. } => true,
-        ResponseEvent::Created
-        | ResponseEvent::ServerModel(_)
-        | ResponseEvent::ModelVerifications(_)
-        | ResponseEvent::TurnModerationMetadata(_)
-        | ResponseEvent::SafetyBuffering(_)
-        | ResponseEvent::ServerReasoningIncluded(_)
-        | ResponseEvent::ToolCallInputDelta { .. }
-        | ResponseEvent::Completed { .. }
-        | ResponseEvent::ReasoningSummaryPartAdded { .. }
-        | ResponseEvent::RateLimits(_)
-        | ResponseEvent::ModelsEtag(_) => false,
-    }
-}
-
-fn response_item_records_turn_ttft(item: &ResponseItem) -> bool {
-    match item {
-        ResponseItem::Message { .. } => {
-            raw_assistant_output_text_from_item(item).is_some_and(|text| !text.is_empty())
-        }
-        ResponseItem::Reasoning {
-            summary, content, ..
-        } => {
-            summary.iter().any(|entry| match entry {
-                codex_protocol::models::ReasoningItemReasoningSummary::SummaryText { text } => {
-                    !text.is_empty()
-                }
-            }) || content.as_ref().is_some_and(|entries| {
-                entries.iter().any(|entry| match entry {
-                    codex_protocol::models::ReasoningItemContent::ReasoningText { text }
-                    | codex_protocol::models::ReasoningItemContent::Text { text } => {
-                        !text.is_empty()
-                    }
-                })
-            })
-        }
-        ResponseItem::AgentMessage { .. } => false,
-        ResponseItem::LocalShellCall { .. }
-        | ResponseItem::FunctionCall { .. }
-        | ResponseItem::CustomToolCall { .. }
-        | ResponseItem::ToolSearchCall { .. }
-        | ResponseItem::WebSearchCall { .. }
-        | ResponseItem::ImageGenerationCall { .. }
-        | ResponseItem::Compaction { .. }
-        | ResponseItem::ContextCompaction { .. } => true,
-        ResponseItem::CompactionTrigger { .. } => false,
-        ResponseItem::AdditionalTools { .. }
-        | ResponseItem::FunctionCallOutput { .. }
-        | ResponseItem::CustomToolCallOutput { .. }
-        | ResponseItem::ToolSearchOutput { .. }
-        | ResponseItem::Other => false,
     }
 }
 

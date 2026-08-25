@@ -31,7 +31,7 @@ pub trait AuthProvider: Send + Sync {
     /// Adds any auth headers that are available without request body access.
     ///
     /// Implementations should be cheap and non-blocking. This method is also
-    /// used by telemetry and non-HTTP request paths.
+    /// used by non-HTTP request paths.
     fn add_auth_headers(&self, headers: &mut HeaderMap);
 
     /// Returns any auth headers that are available without request body access.
@@ -66,27 +66,3 @@ pub type AuthProviderFuture<'a> =
 
 /// Shared auth handle passed through API clients.
 pub type SharedAuthProvider = Arc<dyn AuthProvider>;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentIdentityTelemetry {
-    pub agent_id: String,
-    pub task_id: String,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct AuthHeaderTelemetry {
-    pub attached: bool,
-    pub name: Option<&'static str>,
-}
-
-pub fn auth_header_telemetry(auth: &dyn AuthProvider) -> AuthHeaderTelemetry {
-    let mut headers = HeaderMap::new();
-    auth.add_auth_headers(&mut headers);
-    let name = headers
-        .contains_key(http::header::AUTHORIZATION)
-        .then_some("authorization");
-    AuthHeaderTelemetry {
-        attached: name.is_some(),
-        name,
-    }
-}

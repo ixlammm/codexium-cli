@@ -164,6 +164,7 @@ impl CatalogRequestProcessor {
         Self::list_models(
             self.thread_manager.clone(),
             self.config.http_client_factory(),
+            self.config.codex_home.as_path(),
             params,
         )
         .await
@@ -256,6 +257,7 @@ impl CatalogRequestProcessor {
     async fn list_models(
         thread_manager: Arc<ThreadManager>,
         http_client_factory: codex_http_client::HttpClientFactory,
+        codex_home: &std::path::Path,
         params: ModelListParams,
     ) -> Result<ModelListResponse, JSONRPCErrorError> {
         let ModelListParams {
@@ -265,6 +267,7 @@ impl CatalogRequestProcessor {
         } = params;
         let models = supported_models(
             thread_manager,
+            codex_home,
             include_hidden.unwrap_or(false),
             http_client_factory,
         )

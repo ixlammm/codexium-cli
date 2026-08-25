@@ -2,6 +2,10 @@ use super::*;
 
 use crate::responses_metadata::AUTO_REVIEW_ENABLED_KEY;
 use crate::responses_metadata::CodexResponsesRequestKind;
+use crate::responses_metadata::CompactionImplementation;
+use crate::responses_metadata::CompactionPhase;
+use crate::responses_metadata::CompactionReason;
+use crate::responses_metadata::CompactionTrigger;
 use crate::responses_metadata::CompactionTurnMetadata;
 use crate::responses_metadata::INSTALLATION_ID_KEY;
 use crate::responses_metadata::LEGACY_CODE_MODE_TOOL_NAMES_KEY;
@@ -17,10 +21,6 @@ use crate::responses_metadata::TurnToolSource;
 use crate::responses_metadata::WINDOW_ID_KEY;
 use crate::responses_metadata::validate_extra_metadata;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
-use codex_analytics::CompactionImplementation;
-use codex_analytics::CompactionPhase;
-use codex_analytics::CompactionReason;
-use codex_analytics::CompactionTrigger;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -144,7 +144,7 @@ async fn wait_for_git_enrichment(state: &TurnMetadataState) -> Value {
 
 #[tokio::test]
 async fn detached_memory_responses_metadata_omits_turn_identity() {
-    let (_temp_dir, repo_path) = create_clean_git_repo("repo-東京").await;
+    let (_temp_dir, repo_path) = create_clean_git_repo("repo-æ±äº¬").await;
 
     let header = detached_memory_responses_metadata(
         String::new(),
@@ -160,7 +160,7 @@ async fn detached_memory_responses_metadata_omits_turn_identity() {
     .turn_metadata_json()
     .expect("header");
     assert!(header.is_ascii());
-    assert!(!header.contains("東京"));
+    assert!(!header.contains("æ±äº¬"));
     let parsed: Value = serde_json::from_str(&header).expect("valid json");
     assert_eq!(parsed["request_kind"].as_str(), Some("memory"));
     assert_eq!(parsed[SANDBOX_MODE_KEY].as_str(), Some("read-only"));
@@ -685,7 +685,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
             "client-supplied".to_string(),
         ),
         ("fiber_run_id".to_string(), "fiber-123".to_string()),
-        ("origin".to_string(), "東京".to_string()),
+        ("origin".to_string(), "æ±äº¬".to_string()),
         ("workspace_kind".to_string(), "projectless".to_string()),
         ("model".to_string(), "client-supplied".to_string()),
         (
@@ -757,11 +757,11 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
 
     let header = test_turn_metadata_header(&state);
     assert!(header.is_ascii());
-    assert!(!header.contains("東京"));
+    assert!(!header.contains("æ±äº¬"));
     let json: Value = serde_json::from_str(&header).expect("json");
 
     assert_eq!(json["fiber_run_id"].as_str(), Some("fiber-123"));
-    assert_eq!(json["origin"].as_str(), Some("東京"));
+    assert_eq!(json["origin"].as_str(), Some("æ±äº¬"));
     assert_eq!(json["workspace_kind"].as_str(), Some("projectless"));
     assert_eq!(json["codex_security_surface"].as_str(), Some("sdk"));
     assert_eq!(json["model"].as_str(), Some("client-supplied"));
@@ -875,7 +875,6 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert!(meta.get(ROOT_TURN_ID_KEY).is_none());
     assert!(meta.get(WINDOW_ID_KEY).is_none());
     assert!(meta.get("codex_security_surface").is_none());
-    assert_eq!(state.workspace_kind().as_deref(), Some("projectless"));
 }
 
 #[test]

@@ -27,7 +27,6 @@ use super::RolloutMigrationStatus;
 use super::find_rollout_paths;
 use super::migration_error;
 use super::publish::pending_migration_thread_ids;
-use super::telemetry::RolloutMigrationTrigger;
 use crate::ThreadStoreResult;
 
 const LEGACY_TO_PAGINATED_MIGRATION_ID: &str = "legacy_to_paginated_v1";
@@ -119,14 +118,13 @@ async fn migrate_all_rollouts(
     existing_skips: &[RolloutMigrationSkippedRollout],
 ) -> ThreadStoreResult<()> {
     let report = store
-        .migrate_rollouts_with_progress_for_trigger(
+        .migrate_rollouts_with_progress_inner(
             RolloutMigrationOptions {
                 mode: RolloutMigrationMode::Apply,
                 thread_ids: Vec::new(),
                 max_mib_per_second: None,
             },
-            |_| {},
-            RolloutMigrationTrigger::Startup,
+            &mut |_| {},
         )
         .await?;
     let existing_skip_paths = existing_skips

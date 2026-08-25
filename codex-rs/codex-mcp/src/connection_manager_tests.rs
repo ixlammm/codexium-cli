@@ -32,7 +32,6 @@ use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_connectors::ConnectorRuntimeContext;
 use codex_connectors::ConnectorRuntimeContextKey;
-use codex_connectors::ConnectorRuntimeFetchSource;
 use codex_connectors::ConnectorRuntimeManager;
 use codex_exec_server_test_support::environment_manager_without_environments;
 use codex_login::AuthHeaders;
@@ -195,7 +194,7 @@ fn create_codex_apps_tools_cache_context(
 
 fn store_current_tools(cache_context: &ConnectorRuntimeContext<ToolInfo>, tools: Vec<ToolInfo>) {
     let _ = cache_context.publish_if_newest_accepted(
-        cache_context.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh),
+        cache_context.begin_fetch(),
         &create_test_server_info("Codex Apps"),
         tools,
     );
@@ -393,7 +392,6 @@ async fn legacy_tool_catalog_does_not_follow_pagination_cursor() -> anyhow::Resu
     let tools = list_tools_for_client_uncached(
         "legacy",
         /*is_codex_apps_mcp_server*/ false,
-        "test",
         &client,
         Some(Duration::from_secs(5)),
         crate::pagination::MAX_MCP_CATALOG_ITEMS,
@@ -4010,7 +4008,6 @@ async fn reconciliation_reuses_connection_without_relisting_regular_tools() -> a
     let initial_tools = list_tools_for_client_uncached(
         "docs",
         /*is_codex_apps_mcp_server*/ false,
-        /*codex_apps_refresh_trigger*/ "test",
         &client,
         /*timeout*/ None,
         crate::pagination::MAX_MCP_CATALOG_ITEMS,

@@ -53,8 +53,6 @@ impl AppsRequestProcessor {
         request_id: &ConnectionRequestId,
         params: AppsListParams,
     ) -> Result<Option<AppsListResponse>, JSONRPCErrorError> {
-        let installed_start = Instant::now();
-        let reload = params.force_refetch;
         let thread = if let Some(thread_id) = params.thread_id.as_deref() {
             let (_, loaded_thread) = self.load_thread(thread_id).await?;
             Some(loaded_thread)
@@ -82,7 +80,6 @@ impl AppsRequestProcessor {
                 data: Vec::new(),
                 next_cursor: None,
             };
-            record_legacy_apps_installed_duration(installed_start, reload);
             return Ok(Some(response));
         }
 
@@ -94,7 +91,6 @@ impl AppsRequestProcessor {
                 data: Vec::new(),
                 next_cursor: None,
             };
-            record_legacy_apps_installed_duration(installed_start, reload);
             return Ok(Some(response));
         }
 
@@ -115,7 +111,6 @@ impl AppsRequestProcessor {
                     environment_manager,
                     mcp_manager,
                     plugins_manager,
-                    installed_start,
                 ) => {}
             }
         });
@@ -135,9 +130,7 @@ impl AppsRequestProcessor {
         environment_manager: Arc<EnvironmentManager>,
         mcp_manager: Arc<McpManager>,
         plugins_manager: Arc<PluginsManager>,
-        installed_start: Instant,
     ) {
-        let reload = params.force_refetch;
         let retry_params = params.clone();
         let retry_config = config.clone();
         let retry_environment_manager = Arc::clone(&environment_manager);
@@ -152,9 +145,7 @@ impl AppsRequestProcessor {
             plugins_manager,
         )
         .await;
-        if result.is_ok() {
-            record_legacy_apps_installed_duration(installed_start, reload);
-        }
+        if result.is_ok() {}
         let should_retry = result
             .as_ref()
             .is_ok_and(|(_, codex_apps_ready)| !codex_apps_ready);
@@ -405,20 +396,6 @@ impl AppsRequestProcessor {
 }
 
 const APP_LIST_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
-// `app/list` is the legacy request-path baseline for the `app/installed` endpoint;
-// `path=legacy` keeps it separate from the new snapshot-backed implementation in dashboards.
-const APPS_INSTALLED_DURATION_METRIC: &str = "codex.apps.installed.duration_ms";
-
-fn record_legacy_apps_installed_duration(started_at: Instant, reload: bool) {
-    let reload = if reload { "true" } else { "false" };
-    if let Some(metrics) = codex_otel::global() {
-        let _ = metrics.record_duration(
-            APPS_INSTALLED_DURATION_METRIC,
-            started_at.elapsed(),
-            &[("path", "legacy"), ("reload", reload)],
-        );
-    }
-}
 enum AppListLoadResult {
     Accessible(Result<AccessibleConnectorsStatus, String>),
     Directory(Result<Vec<AppInfo>, String>),

@@ -3,7 +3,6 @@ use codex_extension_api::ToolCall;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolSpec;
-use codex_otel::MetricsClient;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
@@ -12,7 +11,6 @@ use crate::ADD_AD_HOC_NOTE_TOOL_NAME;
 use crate::backend::AddAdHocMemoryNoteRequest;
 use crate::backend::AddAdHocMemoryNoteResponse;
 use crate::backend::MemoriesBackend;
-use crate::metrics::record_tool_call;
 
 use super::backend_error_to_function_call;
 use super::memory_function_tool;
@@ -38,7 +36,6 @@ struct AddAdHocNoteArgs {
 #[derive(Clone)]
 pub(super) struct AddAdHocNoteTool<B> {
     pub(super) backend: B,
-    pub(super) metrics_client: Option<MetricsClient>,
 }
 
 impl<B> ToolExecutor<ToolCall> for AddAdHocNoteTool<B>
@@ -78,13 +75,6 @@ where
                 note: args.note,
             })
             .await;
-        record_tool_call(
-            self.metrics_client.as_ref(),
-            ADD_AD_HOC_NOTE_TOOL_NAME,
-            "ad_hoc_notes",
-            response.is_ok(),
-            "not_applicable",
-        );
         let response = response.map_err(backend_error_to_function_call)?;
         Ok(Box::new(JsonToolOutput::new(json!(response))))
     }

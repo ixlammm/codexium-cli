@@ -1,12 +1,10 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_connectors::ConnectorRuntimeFetchSource;
 use futures::future::join_all;
 use tracing::Instrument;
 use tracing::instrument;
@@ -19,12 +17,9 @@ use crate::binding::McpBinding;
 use crate::binding::PreparedMcpCall;
 use crate::binding_clients::McpBindingClients;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
-use crate::rmcp_client::CODEX_APPS_REFRESH_DURATION_METRIC;
-use crate::rmcp_client::MCP_TOOLS_LIST_DURATION_METRIC;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::list_tools_for_client_uncached;
 use crate::rmcp_client::prepare_codex_apps_tools_for_model;
-use crate::runtime::emit_duration;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
 use crate::tools::normalize_tools_for_model_with_prefix;
@@ -353,7 +348,6 @@ impl McpConnectionSet {
     )]
     pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
         let _refresh = self.codex_apps_refresh_lock.lock().await;
-        let refresh_start = Instant::now();
         let view = self
             .servers
             .get(CODEX_APPS_MCP_SERVER_NAME)
@@ -364,18 +358,13 @@ impl McpConnectionSet {
             .await
             .context("failed to get client")?;
 
-        let list_start = Instant::now();
-        let fetch_ticket =
-            managed_client
-                .codex_apps_tools_cache_context
-                .as_ref()
-                .map(|cache_context| {
-                    cache_context.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh)
-                });
+        let fetch_ticket = managed_client
+            .codex_apps_tools_cache_context
+            .as_ref()
+            .map(codex_connectors::ConnectorRuntimeContext::begin_fetch);
         let client_tools = list_tools_for_client_uncached(
             CODEX_APPS_MCP_SERVER_NAME,
             /*is_codex_apps_mcp_server*/ true,
-            /*codex_apps_refresh_trigger*/ "explicit",
             &managed_client.client,
             view.tool_timeout,
             view.catalog_item_limit,
@@ -402,11 +391,6 @@ impl McpConnectionSet {
         *self.codex_apps_tools_override.write().await = Some(client_tools);
         *tool_catalog_revision += 1;
         drop(tool_catalog_revision);
-        emit_duration(
-            MCP_TOOLS_LIST_DURATION_METRIC,
-            list_start.elapsed(),
-            &[("cache", "miss")],
-        );
         let tools = prepare_codex_apps_tools_for_model(
             filter_tools(tools, &view.tool_filter),
             &self.tool_plugin_provenance,
@@ -417,11 +401,6 @@ impl McpConnectionSet {
             tools,
             self.prefix_mcp_tool_names,
             &self.non_prefixed_mcp_tool_servers,
-        );
-        emit_duration(
-            CODEX_APPS_REFRESH_DURATION_METRIC,
-            refresh_start.elapsed(),
-            &[("path", "legacy"), ("trigger", "explicit")],
         );
         Ok(tools)
     }

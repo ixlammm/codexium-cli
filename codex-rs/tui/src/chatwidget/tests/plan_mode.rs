@@ -1562,7 +1562,6 @@ async fn make_startup_chat_with_cli_overrides(
         .await
         .expect("config");
     let resolved_model = get_model_offline_for_tests(cfg.model.as_deref());
-    let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
         config: cfg.clone(),
         frame_requester: FrameRequester::test_dummy(),
@@ -1573,7 +1572,6 @@ async fn make_startup_chat_with_cli_overrides(
         has_chatgpt_account: false,
         has_codex_backend_auth: false,
         model_catalog: test_model_catalog(&cfg),
-        feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         status_account_display: None,
         runtime_model_provider_base_url: None,
@@ -1582,7 +1580,6 @@ async fn make_startup_chat_with_cli_overrides(
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
-        session_telemetry,
     };
 
     ChatWidget::new_with_app_event(init)

@@ -163,19 +163,6 @@ impl ChatWidget {
         }
 
         match cmd {
-            SlashCommand::Feedback => {
-                if !self.config.feedback_enabled {
-                    let params = crate::bottom_pane::feedback_disabled_params();
-                    self.bottom_pane.show_selection_view(params);
-                    self.request_redraw();
-                    return;
-                }
-                // Step 1: pick a category (UI built in feedback_view)
-                let params =
-                    crate::bottom_pane::feedback_selection_params(self.app_event_tx.clone());
-                self.bottom_pane.show_selection_view(params);
-                self.request_redraw();
-            }
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession { name: None });
             }
@@ -279,8 +266,6 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Rename => {
-                self.session_telemetry
-                    .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 self.show_rename_prompt();
             }
             SlashCommand::Model => {
@@ -360,11 +345,6 @@ impl ChatWidget {
                         return;
                     }
 
-                    self.session_telemetry.counter(
-                        "codex.windows_sandbox.setup_elevated_sandbox_command",
-                        /*inc*/ 1,
-                        &[],
-                    );
                     self.app_event_tx
                         .send(AppEvent::BeginWindowsSandboxElevatedSetup {
                             preset,
@@ -373,7 +353,6 @@ impl ChatWidget {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = &self.session_telemetry;
                     // Not supported; on non-Windows this command should never be reachable.
                 }
             }
@@ -740,8 +719,6 @@ impl ChatWidget {
                 if !self.ensure_thread_rename_allowed() {
                     return;
                 }
-                self.session_telemetry
-                    .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 let Some(name) = normalize_thread_name(&args) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
@@ -1102,8 +1079,7 @@ impl ChatWidget {
             | SlashCommand::App
             | SlashCommand::Rename
             | SlashCommand::TestApproval => QueueDrain::Continue,
-            SlashCommand::Feedback
-            | SlashCommand::Export
+            SlashCommand::Export
             | SlashCommand::New
             | SlashCommand::Archive
             | SlashCommand::Delete

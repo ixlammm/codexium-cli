@@ -2,7 +2,6 @@ use std::num::NonZeroUsize;
 use std::num::ParseIntError;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Instant;
 
 use codex_exec_server_protocol::JSONRPCError;
 use codex_exec_server_protocol::JSONRPCNotification;
@@ -31,7 +30,6 @@ use crate::rpc::invalid_request;
 use crate::rpc::method_not_found;
 use crate::rpc_server_requests::RpcServerRequestSender;
 use crate::server::ExecServerHandler;
-use crate::telemetry::ExecServerTelemetry;
 
 pub(super) struct RequestDispatcher {
     router: Arc<RpcRouter<ExecServerHandler>>,
@@ -39,7 +37,6 @@ pub(super) struct RequestDispatcher {
     outgoing_tx: mpsc::Sender<RpcServerOutboundMessage>,
     disconnected_rx: watch::Receiver<bool>,
     requests: RpcServerRequestSender,
-    telemetry: ExecServerTelemetry,
     lanes: Option<RequestLanes>,
     tasks: JoinSet<RequestTaskResult>,
     initialized: bool,
@@ -52,7 +49,6 @@ impl RequestDispatcher {
         outgoing_tx: mpsc::Sender<RpcServerOutboundMessage>,
         disconnected_rx: watch::Receiver<bool>,
         requests: RpcServerRequestSender,
-        telemetry: ExecServerTelemetry,
         mode: RequestDispatchMode,
     ) -> Self {
         let lanes = match mode {
@@ -71,7 +67,6 @@ impl RequestDispatcher {
             outgoing_tx,
             disconnected_rx,
             requests,
-            telemetry,
             lanes,
             tasks: JoinSet::new(),
             initialized: false,
@@ -171,10 +166,7 @@ impl RequestDispatcher {
     }
 
     pub(super) async fn dispatch_request(&mut self, request: JSONRPCRequest) -> RequestTaskResult {
-        let started_at = Instant::now();
         let Some((method, route)) = self.router.request_route(request.method.as_str()) else {
-            let method = "unknown";
-            let span = request_span(method, &request);
             if self
                 .outgoing_tx
                 .send(RpcServerOutboundMessage::Error {
@@ -187,14 +179,8 @@ impl RequestDispatcher {
                 .await
                 .is_err()
             {
-                span.record("result", "disconnected");
-                self.telemetry
-                    .request_completed(method, "disconnected", started_at.elapsed());
                 return RequestTaskResult::ConnectionClosed;
             }
-            span.record("result", "error");
-            self.telemetry
-                .request_completed(method, "error", started_at.elapsed());
             return RequestTaskResult::Completed;
         };
 
@@ -202,17 +188,13 @@ impl RequestDispatcher {
         let route = route(Arc::clone(&self.handler), request);
         let outgoing_tx = self.outgoing_tx.clone();
         let mut disconnected_rx = self.disconnected_rx.clone();
-        let telemetry = self.telemetry.clone();
         let task = async move {
             let message = tokio::select! {
-                message = route.instrument(task_span.clone()) => message,
+                message = route.instrument(task_span) => message,
                 _ = disconnected_rx.changed() => {
-                    task_span.record("result", "disconnected");
-                    telemetry.request_completed(method, "disconnected", started_at.elapsed());
                     return RequestTaskResult::ConnectionClosed;
                 }
             };
-            let result = request_result(&message);
             let response_sent = match message {
                 Some(message) => tokio::select! {
                     result = outgoing_tx.send(message) => result.is_ok(),
@@ -221,12 +203,8 @@ impl RequestDispatcher {
                 None => true,
             };
             if !response_sent {
-                task_span.record("result", "disconnected");
-                telemetry.request_completed(method, "disconnected", started_at.elapsed());
                 return RequestTaskResult::ConnectionClosed;
             }
-            task_span.record("result", result);
-            telemetry.request_completed(method, result, started_at.elapsed());
             RequestTaskResult::Completed
         };
 
@@ -328,31 +306,7 @@ pub(super) enum RequestTaskResult {
 
 fn request_span(span_name: &str, request: &JSONRPCRequest) -> tracing::Span {
     let method = request.method.as_str();
-    let span = tracing::info_span!(
-        "codex.exec_server.request",
-        otel.kind = "server",
-        otel.name = span_name,
-        method,
-        result = tracing::field::Empty,
-    );
-    if let Some(trace) = &request.trace
-        && !codex_otel::set_parent_from_w3c_trace_context(&span, trace)
-    {
-        warn!(method, "ignoring invalid inbound exec-server trace carrier");
-    }
-    span
-}
-
-fn request_result(message: &Option<RpcServerOutboundMessage>) -> &'static str {
-    match message {
-        Some(RpcServerOutboundMessage::Error { .. }) => "error",
-        Some(
-            RpcServerOutboundMessage::Request(_)
-            | RpcServerOutboundMessage::Response { .. }
-            | RpcServerOutboundMessage::Notification(_),
-        )
-        | None => "success",
-    }
+    tracing::info_span!("codex.exec_server.request", otel.name = span_name, method)
 }
 
 #[cfg(test)]

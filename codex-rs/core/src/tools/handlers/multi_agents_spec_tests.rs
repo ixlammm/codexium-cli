@@ -35,6 +35,9 @@ fn model_preset(id: &str, show_in_picker: bool) -> ModelPreset {
         availability_nux: None,
         supported_in_api: true,
         input_modalities: Vec::new(),
+        is_custom: false,
+        provider: None,
+        provider_label: None,
     }
 }
 

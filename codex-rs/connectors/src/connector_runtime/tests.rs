@@ -1,4 +1,4 @@
-use super::persistence::CODEX_APPS_TOOLS_CACHE_MAX_BYTES;
+﻿use super::persistence::CODEX_APPS_TOOLS_CACHE_MAX_BYTES;
 use super::persistence::CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION;
 use super::persistence::read_cached_codex_apps_tools;
 use super::persistence::write_cached_codex_apps_tools;
@@ -365,8 +365,8 @@ fn codex_apps_tools_cache_publishes_newest_shared_snapshot() {
             is_workspace_account: false,
         },
     );
-    let older_ticket = cache_context_1.begin_fetch(ConnectorRuntimeFetchSource::Startup);
-    let newer_ticket = cache_context_2.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh);
+    let older_ticket = cache_context_1.begin_fetch();
+    let newer_ticket = cache_context_2.begin_fetch();
     let server_info = create_test_server_info("Codex Apps");
     let newer_tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "newer")];
     let older_tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "older")];
@@ -404,7 +404,7 @@ fn codex_apps_tools_cache_keeps_live_publish_when_disk_persistence_fails() {
     );
     let tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "live")];
     let published_tools = cache_context.publish_if_newest_accepted(
-        cache_context.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh),
+        cache_context.begin_fetch(),
         &create_test_server_info("Codex Apps"),
         tools.clone(),
     );
@@ -451,7 +451,7 @@ fn connector_runtime_without_cache_publishes_without_writing() {
     );
     let tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "live")];
     let published_tools = context.publish_if_newest_accepted(
-        context.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh),
+        context.begin_fetch(),
         &create_test_server_info("Codex Apps"),
         tools.clone(),
     );
@@ -506,11 +506,11 @@ fn contexts_for_different_identities_keep_isolated_snapshots() {
     );
     let tools_a = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "tool-a")];
     let snapshot_a = context_a.publish_runtime_if_newest_accepted(
-        context_a.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh),
+        context_a.begin_fetch(),
         &create_test_server_info("Codex Apps"),
         tools_a.clone(),
     );
-    let older_ticket_a = context_a.begin_fetch(ConnectorRuntimeFetchSource::Startup);
+    let older_ticket_a = context_a.begin_fetch();
     let context_b = manager.context(
         codex_home.path().to_path_buf(),
         ConnectorRuntimeContextKey {
@@ -538,13 +538,13 @@ fn contexts_for_different_identities_keep_isolated_snapshots() {
 
     let tools_b = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "tool-b")];
     let snapshot_b = context_b.publish_runtime_if_newest_accepted(
-        context_b.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh),
+        context_b.begin_fetch(),
         &create_test_server_info("Codex Apps"),
         tools_b.clone(),
     );
     let newer_tools_a = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "newer-a")];
     let newer_snapshot_a = same_context_a.publish_runtime_if_newest_accepted(
-        same_context_a.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh),
+        same_context_a.begin_fetch(),
         &create_test_server_info("Codex Apps"),
         newer_tools_a.clone(),
     );
@@ -624,8 +624,8 @@ fn accepted_generations_finish_persistence_in_order() {
         Some("account-one"),
         Some("user-one"),
     );
-    let older_ticket = context.begin_fetch(ConnectorRuntimeFetchSource::Startup);
-    let newer_ticket = context.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh);
+    let older_ticket = context.begin_fetch();
+    let newer_ticket = context.begin_fetch();
     let (older_persisting_tx, older_persisting_rx) = std::sync::mpsc::channel();
     let (release_older_tx, release_older_rx) = std::sync::mpsc::channel();
     let older_context = context.clone();
@@ -692,7 +692,7 @@ fn personal_and_workspace_contexts_are_distinct_even_with_matching_ids() {
     );
     let personal_tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "personal")];
     let _ = personal_context.publish_runtime_if_newest_accepted(
-        personal_context.begin_fetch(ConnectorRuntimeFetchSource::Startup),
+        personal_context.begin_fetch(),
         &create_test_server_info("Codex Apps"),
         personal_tools.clone(),
     );
@@ -708,7 +708,7 @@ fn personal_and_workspace_contexts_are_distinct_even_with_matching_ids() {
 
     let workspace_tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "workspace")];
     let _ = workspace_context.publish_runtime_if_newest_accepted(
-        workspace_context.begin_fetch(ConnectorRuntimeFetchSource::Startup),
+        workspace_context.begin_fetch(),
         &create_test_server_info("Codex Apps"),
         workspace_tools.clone(),
     );
@@ -729,8 +729,8 @@ fn live_publish_sets_timestamp_and_stale_publish_preserves_it() {
         Some("account-one"),
         Some("user-one"),
     );
-    let stale_ticket = context.begin_fetch(ConnectorRuntimeFetchSource::Startup);
-    let current_ticket = context.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh);
+    let stale_ticket = context.begin_fetch();
+    let current_ticket = context.begin_fetch();
     let before = SystemTime::now();
     let current = context.publish_runtime_if_newest_accepted(
         current_ticket,

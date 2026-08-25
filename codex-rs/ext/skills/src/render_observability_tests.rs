@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+﻿use std::sync::Mutex;
 
 use codex_extension_api::ExtensionMetrics;
 use pretty_assertions::assert_eq;
@@ -58,22 +58,22 @@ fn records_core_equivalent_catalog_render_metrics_with_surface() {
             .unwrap_or_else(std::sync::PoisonError::into_inner),
         vec![
             RecordedHistogram {
-                name: THREAD_SKILLS_ENABLED_TOTAL_METRIC.to_string(),
+                name: "codex.thread.skills.enabled_total".to_string(),
                 value: 5,
                 tags: vec![("catalog_surface".to_string(), "turn_input".to_string())],
             },
             RecordedHistogram {
-                name: THREAD_SKILLS_KEPT_TOTAL_METRIC.to_string(),
+                name: "codex.thread.skills.kept_total".to_string(),
                 value: 3,
                 tags: vec![("catalog_surface".to_string(), "turn_input".to_string())],
             },
             RecordedHistogram {
-                name: THREAD_SKILLS_TRUNCATED_METRIC.to_string(),
+                name: "codex.thread.skills.truncated".to_string(),
                 value: 1,
                 tags: vec![("catalog_surface".to_string(), "turn_input".to_string())],
             },
             RecordedHistogram {
-                name: THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC.to_string(),
+                name: "codex.thread.skills.description_truncated_chars".to_string(),
                 value: 700,
                 tags: vec![("catalog_surface".to_string(), "turn_input".to_string())],
             },

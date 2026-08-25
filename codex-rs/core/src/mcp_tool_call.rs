@@ -20,9 +20,6 @@ use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::ApprovalAction;
 use crate::tools::sandboxing::ToolError;
 use crate::turn_metadata::McpTurnMetadataContext;
-use codex_analytics::AppInvocation;
-use codex_analytics::InvocationType;
-use codex_analytics::build_track_events_context;
 use codex_api::HostedFileUploadContext;
 use codex_config::ConfigLayerSource;
 use codex_config::types::AppToolApproval;
@@ -86,24 +83,7 @@ use toml_edit::value;
 use tracing::Instrument;
 use tracing::Span;
 use tracing::error;
-use tracing::field::Empty;
-use url::Url;
 
-mod telemetry;
-
-use telemetry::McpCallMetricOutcome;
-use telemetry::emit_mcp_call_metrics;
-use telemetry::mcp_call_metric_outcome;
-use telemetry::record_mcp_call_outcome_span_telemetry;
-
-const MCP_RESULT_TELEMETRY_META_KEY: &str = "codex/telemetry";
-const MCP_RESULT_TELEMETRY_SPAN_KEY: &str = "span";
-const MCP_RESULT_TELEMETRY_TARGET_ID_KEY: &str = "target_id";
-const MCP_RESULT_TELEMETRY_DID_TRIGGER_SERVER_USER_FLOW_KEY: &str = "did_trigger_server_user_flow";
-const MCP_RESULT_TELEMETRY_TARGET_ID_SPAN_ATTR: &str = "codex.mcp.target.id";
-const MCP_RESULT_TELEMETRY_SERVER_USER_FLOW_SPAN_ATTR: &str =
-    "codex.mcp.server_user_flow.triggered";
-const MCP_RESULT_TELEMETRY_TARGET_ID_MAX_CHARS: usize = 256;
 const MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES: usize = DEFAULT_OUTPUT_BYTES_CAP;
 
 /// Handles the specified tool call and dispatches the appropriate MCP tool-call
@@ -183,9 +163,6 @@ pub(crate) async fn handle_mcp_tool_call(
         prepared_call.tool_approval_mode()
     };
 
-    let connector_id = metadata.connector_id.clone();
-    let connector_name = metadata.connector_name.clone();
-
     if server == CODEX_APPS_MCP_SERVER_NAME && !app_tool_policy.enabled {
         let result = notify_mcp_tool_call_skip(
             sess.as_ref(),
@@ -197,17 +174,6 @@ pub(crate) async fn handle_mcp_tool_call(
             /*already_started*/ false,
         )
         .await;
-        let status = if result.is_ok() { "ok" } else { "error" };
-        let outcome = McpCallMetricOutcome::from_status(status);
-        emit_mcp_call_metrics(
-            turn_context.as_ref(),
-            &outcome,
-            &server,
-            &tool_name,
-            connector_id.as_deref(),
-            connector_name.as_deref(),
-            /*duration*/ None,
-        );
         return HandledMcpToolCall {
             result: CallToolResult::from_result(result),
             tool_input: arguments_value
@@ -302,18 +268,6 @@ pub(crate) async fn handle_mcp_tool_call(
                 .await
             }
         };
-
-        let status = if result.is_ok() { "ok" } else { "error" };
-        let outcome = McpCallMetricOutcome::from_status(status);
-        emit_mcp_call_metrics(
-            turn_context.as_ref(),
-            &outcome,
-            &server,
-            &tool_name,
-            connector_id.as_deref(),
-            connector_name.as_deref(),
-            /*duration*/ None,
-        );
 
         return HandledMcpToolCall {
             result: CallToolResult::from_result(result),
@@ -502,7 +456,6 @@ async fn handle_approved_mcp_tool_call(
             .await)
         }
         .await;
-        record_mcp_result_span_telemetry(&Span::current(), &result);
         result
     }
     .instrument(mcp_tool_call_span(
@@ -532,18 +485,6 @@ async fn handle_approved_mcp_tool_call(
         truncate_mcp_tool_result_for_event(&result),
     )
     .await;
-    maybe_track_codex_app_used(sess, turn_context, &server, &metadata).await;
-
-    let outcome = mcp_call_metric_outcome(&result);
-    emit_mcp_call_metrics(
-        turn_context,
-        &outcome,
-        &server,
-        &tool_name,
-        connector_id,
-        connector_name,
-        Some(duration),
-    );
 
     HandledMcpToolCall {
         result: CallToolResult::from_result(result),
@@ -564,9 +505,6 @@ fn mcp_tool_call_span(
     };
     let span = tracing::info_span!(
         "mcp.tools.call",
-        otel.kind = "client",
-        rpc.system = "jsonrpc",
-        rpc.method = "tools/call",
         mcp.server.name = fields.server_name,
         mcp.server.origin = fields.server_origin.unwrap_or(""),
         mcp.transport = transport,
@@ -577,14 +515,7 @@ fn mcp_tool_call_span(
         conversation.id = %session.thread_id,
         session.id = %session.thread_id,
         turn.id = turn_context.sub_id.as_str(),
-        server.address = Empty,
-        server.port = Empty,
-        codex.mcp.target.id = Empty,
-        codex.mcp.server_user_flow.triggered = Empty,
-        error.type = Empty,
-        codex.mcp.error.code = Empty,
     );
-    record_server_fields(&span, fields.server_origin);
     span
 }
 
@@ -595,66 +526,6 @@ struct McpToolCallSpanFields<'a> {
     server_origin: Option<&'a str>,
     connector_id: Option<&'a str>,
     connector_name: Option<&'a str>,
-}
-
-fn record_server_fields(span: &Span, url: Option<&str>) {
-    let Some(url) = url else {
-        return;
-    };
-    let Ok(parsed) = Url::parse(url) else {
-        return;
-    };
-    if let Some(host) = parsed.host_str() {
-        span.record("server.address", host);
-    }
-    if let Some(port) = parsed.port_or_known_default() {
-        span.record("server.port", port as i64);
-    }
-}
-
-fn record_mcp_result_span_telemetry(span: &Span, result: &Result<CallToolResult, String>) {
-    record_mcp_call_outcome_span_telemetry(span, result);
-
-    let Some(span_telemetry) = result
-        .as_ref()
-        .ok()
-        .and_then(|result| result.meta.as_ref())
-        .and_then(JsonValue::as_object)
-        .and_then(|meta| meta.get(MCP_RESULT_TELEMETRY_META_KEY))
-        .and_then(JsonValue::as_object)
-        .and_then(|telemetry| telemetry.get(MCP_RESULT_TELEMETRY_SPAN_KEY))
-        .and_then(JsonValue::as_object)
-    else {
-        return;
-    };
-
-    if let Some(target_id) = span_telemetry
-        .get(MCP_RESULT_TELEMETRY_TARGET_ID_KEY)
-        .and_then(JsonValue::as_str)
-        .filter(|target_id| !target_id.is_empty())
-    {
-        span.record(
-            MCP_RESULT_TELEMETRY_TARGET_ID_SPAN_ATTR,
-            truncate_str_to_char_boundary(target_id, MCP_RESULT_TELEMETRY_TARGET_ID_MAX_CHARS),
-        );
-    }
-
-    if let Some(did_trigger_server_user_flow) = span_telemetry
-        .get(MCP_RESULT_TELEMETRY_DID_TRIGGER_SERVER_USER_FLOW_KEY)
-        .and_then(JsonValue::as_bool)
-    {
-        span.record(
-            MCP_RESULT_TELEMETRY_SERVER_USER_FLOW_SPAN_ATTR,
-            did_trigger_server_user_flow,
-        );
-    }
-}
-
-fn truncate_str_to_char_boundary(value: &str, max_chars: usize) -> &str {
-    match value.char_indices().nth(max_chars) {
-        Some((index, _)) => &value[..index],
-        None => value,
-    }
 }
 
 async fn maybe_request_codex_apps_auth_elicitation(
@@ -994,44 +865,6 @@ async fn notify_mcp_tool_call_completed(
     sess.emit_turn_item_completed(turn_context, item).await;
 }
 
-async fn maybe_track_codex_app_used(
-    sess: &Session,
-    turn_context: &TurnContext,
-    server: &str,
-    metadata: &McpToolApprovalMetadata,
-) {
-    if server != CODEX_APPS_MCP_SERVER_NAME {
-        return;
-    }
-    let connector_id = metadata.connector_id.clone();
-    let app_name = metadata.connector_name.clone();
-    let invocation_type = if let Some(connector_id) = connector_id.as_deref() {
-        let mentioned_connector_ids = sess.get_connector_selection().await;
-        if mentioned_connector_ids.contains(connector_id) {
-            InvocationType::Explicit
-        } else {
-            InvocationType::Implicit
-        }
-    } else {
-        InvocationType::Implicit
-    };
-
-    let tracking = build_track_events_context(
-        turn_context.model_info.slug.clone(),
-        sess.thread_id.to_string(),
-        turn_context.sub_id.clone(),
-        turn_context.originator.clone(),
-    );
-    sess.services.analytics_events_client.track_app_used(
-        tracking,
-        AppInvocation {
-            connector_id,
-            app_name,
-            invocation_type: Some(invocation_type),
-        },
-    );
-}
-
 #[derive(Clone, Copy)]
 struct McpToolApprovalPolicy {
     mode: AppToolApproval,
@@ -1290,7 +1123,7 @@ async fn maybe_request_mcp_tool_approval(
     step_context: &Arc<StepContext>,
     call_id: &str,
     invocation: &McpInvocation,
-    invocation_tool_name: &ToolName,
+    _invocation_tool_name: &ToolName,
     hook_tool_name: &HookToolName,
     metadata: &McpToolApprovalMetadata,
     config: &codex_mcp::McpConfig,
@@ -1363,7 +1196,6 @@ async fn maybe_request_mcp_tool_approval(
     let approval_context = ApprovalContext {
         review_context: GuardianReviewContext::from(step_context),
         call_id: call_id.to_string(),
-        tool_name: invocation_tool_name.clone(),
         strict_auto_review: false,
         approval_reason: None,
         retry_reason: None,

@@ -102,7 +102,7 @@ impl RpcServerRequestSender {
             id: request_id,
             method: method.to_string(),
             params: Some(params),
-            trace: codex_otel::current_span_w3c_trace_context(),
+            trace: None,
         });
 
         let response = timeout(call_timeout, async {

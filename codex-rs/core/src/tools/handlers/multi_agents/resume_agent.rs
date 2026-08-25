@@ -148,8 +148,6 @@ async fn handle_resume_agent(
     if let Some(err) = error {
         return Err(err);
     }
-    turn.session_telemetry
-        .counter("codex.multi_agent.resume", /*inc*/ 1, &[]);
 
     Ok(ResumeAgentResult { status })
 }

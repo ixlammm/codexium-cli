@@ -4,8 +4,6 @@ use crate::context::ImageResizeNotice;
 use crate::context::ImageResizeNoticeSource;
 use crate::context::ResizedImage;
 use crate::original_image_detail::can_request_original_image_detail;
-use codex_analytics::ImageDetailSetting;
-use codex_analytics::ImagePreparationMetadata;
 use codex_features::Feature;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -17,6 +15,25 @@ use codex_utils_image::PromptImageMode;
 use codex_utils_image::PromptImageResizeLimits;
 use codex_utils_image::load_data_url_for_prompt;
 use tracing::warn;
+
+/// Effective image detail applied during preparation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ImageDetailSetting {
+    High,
+    Original,
+}
+
+/// Describes one prepared image for observability of the resize pipeline.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ImagePreparationMetadata {
+    pub(crate) message_role: Option<String>,
+    pub(crate) item_id: Option<String>,
+    pub(crate) effective_detail: ImageDetailSetting,
+    pub(crate) source_width: u32,
+    pub(crate) source_height: u32,
+    pub(crate) prepared_width: u32,
+    pub(crate) prepared_height: u32,
+}
 
 pub(crate) const IMAGE_PROCESSING_ERROR_PLACEHOLDER: &str =
     "image content omitted because it could not be processed";

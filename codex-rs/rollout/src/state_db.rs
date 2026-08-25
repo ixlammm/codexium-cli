@@ -5,7 +5,6 @@ use crate::list::Cursor;
 use crate::list::SortDirection;
 use crate::list::ThreadSortKey;
 use crate::metadata;
-use crate::sqlite_metrics;
 use anyhow::Context;
 use chrono::DateTime;
 use chrono::Utc;
@@ -232,14 +231,6 @@ pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHand
         }
     };
     require_backfill_complete(runtime, config.sqlite_config().home()).await
-}
-
-/// Build a SQLite telemetry recorder backed by an OTEL metrics client.
-pub fn sqlite_telemetry_recorder(
-    metrics: codex_otel::MetricsClient,
-    originator: &str,
-) -> codex_state::DbTelemetryHandle {
-    sqlite_metrics::recorder(metrics, originator)
 }
 
 async fn require_backfill_complete(

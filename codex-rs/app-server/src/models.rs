@@ -12,16 +12,31 @@ use codex_protocol::openai_models::ReasoningEffortPreset;
 
 pub async fn supported_models(
     thread_manager: Arc<ThreadManager>,
+    codex_home: &std::path::Path,
     include_hidden: bool,
     http_client_factory: HttpClientFactory,
 ) -> Vec<Model> {
-    thread_manager
+    let mut presets = thread_manager
         .list_models(RefreshStrategy::OnlineIfUncached, http_client_factory)
-        .await
-        .into_iter()
-        .filter(|preset| include_hidden || preset.show_in_picker)
-        .map(model_from_preset)
-        .collect()
+        .await;
+    // Codexium Patch: re-apply the freshly-read `codexium/models.json` enable/
+    // disable state to the built-in OpenAI models so toggles take effect without
+    // a relaunch (the startup-merged catalog snapshot is frozen otherwise). This
+    // runs BEFORE the show_in_picker filter so a model can be re-enabled too.
+    presets = codex_core::codexium::apply_codexium_visibility(codex_home, presets);
+    presets.retain(|preset| include_hidden || preset.show_in_picker);
+    // Codexium Patch: keep all models of the same provider contiguous so the
+    // renderer's provider-group headers render one group per provider instead of
+    // re-emitting "OpenAI" between custom-provider models. Stable sort preserves
+    // the existing per-group ordering (default/priority). Providers without a
+    // provider id (OpenAI) sort first.
+    presets.sort_by(|a, b| {
+        a.provider
+            .as_deref()
+            .unwrap_or("")
+            .cmp(b.provider.as_deref().unwrap_or(""))
+    });
+    presets.into_iter().map(model_from_preset).collect()
 }
 
 fn model_from_preset(preset: ModelPreset) -> Model {
@@ -59,6 +74,9 @@ fn model_from_preset(preset: ModelPreset) -> Model {
             .collect(),
         default_service_tier: preset.default_service_tier,
         is_default: preset.is_default,
+        is_custom: preset.is_custom,
+        provider: preset.provider,
+        provider_label: preset.provider_label,
     }
 }
 

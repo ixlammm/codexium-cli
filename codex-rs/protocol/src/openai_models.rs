@@ -248,6 +248,15 @@ pub struct ModelPreset {
     /// Input modalities accepted when composing user turns for this preset.
     #[serde(default = "default_input_modalities")]
     pub input_modalities: Vec<InputModality>,
+    /// Codexium Patch: whether this model is a user-defined custom model.
+    #[serde(default)]
+    pub is_custom: bool,
+    /// Codexium Patch: provider id (config key) that owns this model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Codexium Patch: display label for the owning provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_label: Option<String>,
 }
 
 /// Visibility of a model in the picker or APIs.
@@ -417,6 +426,11 @@ pub struct ModelInfo {
     /// Maximum context window allowed for config overrides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_context_window: Option<i64>,
+    /// Codexium Patch: maximum number of output tokens the model can produce in
+    /// one turn. When set, sent as `max_output_tokens` in the Responses API
+    /// request body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<i64>,
     /// Token threshold for automatic compaction. When omitted, core derives it
     /// from `context_window` (90%). When provided, core clamps it to 90% of the
     /// context window when available.
@@ -438,6 +452,17 @@ pub struct ModelInfo {
     #[schemars(skip)]
     #[ts(skip)]
     pub used_fallback_model_metadata: bool,
+    /// Codexium Patch: marks models declared by the user via
+    /// `codexium/models.json` (or a custom provider) so UIs can surface them as
+    /// user-defined models.
+    #[serde(default)]
+    pub is_custom: bool,
+    /// Codexium Patch: provider id (config key) that owns this model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Codexium Patch: display label for the owning provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_label: Option<String>,
     #[serde(default)]
     pub supports_search_tool: bool,
     #[serde(default)]
@@ -756,6 +781,9 @@ impl From<ModelInfo> for ModelPreset {
             availability_nux: info.availability_nux,
             supported_in_api: info.supported_in_api,
             input_modalities: info.input_modalities,
+            is_custom: info.is_custom,
+            provider: info.provider,
+            provider_label: info.provider_label,
         }
     }
 }
@@ -851,13 +879,16 @@ mod tests {
             supports_image_detail_original: false,
             context_window: None,
             max_context_window: None,
+            max_output_tokens: None,
             auto_compact_token_limit: None,
             comp_hash: None,
             effective_context_window_percent: 95,
             experimental_supported_tools: vec![],
             input_modalities: default_input_modalities(),
             used_fallback_model_metadata: false,
-            supports_search_tool: false,
+            is_custom: false,
+            provider: None,
+            provider_label: None,
             use_responses_lite: false,
             node_repl_auto_review_required: false,
             node_repl_disabled: false,

@@ -76,10 +76,7 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-use super::analytics::assert_basic_thread_initialized_event;
 use super::analytics::mount_analytics_capture;
-use super::analytics::thread_initialized_event;
-use super::analytics::wait_for_analytics_payload;
 
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
@@ -1111,7 +1108,7 @@ async fn thread_fork_can_exclude_turns_and_skip_restored_token_usage() -> Result
 }
 
 #[tokio::test]
-async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
+async fn thread_fork_restores_saved_user_message_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let codex_home = TempDir::new()?;
@@ -1146,24 +1143,6 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
     let ThreadForkResponse { thread, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(fork_id)).await??;
 
-    let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
-    let event = thread_initialized_event(&payload)?;
-    assert_basic_thread_initialized_event(
-        event,
-        &thread.id,
-        &thread.session_id,
-        "codex",
-        "mock-model",
-        "forked",
-        "user",
-    );
-    assert_eq!(
-        event["event_params"]["forked_from_thread_id"],
-        thread
-            .forked_from_id
-            .as_deref()
-            .expect("forked thread has a source thread")
-    );
     Ok(())
 }
 

@@ -1,4 +1,3 @@
-use codex_analytics::PluginInstallSource;
 use codex_core::config::ConfigBuilder;
 use codex_core::plugins_manager_for_config;
 use codex_core_plugins::PluginInstallError;
@@ -101,11 +100,7 @@ impl ExternalAgentConfigService {
             .map_err(|err| io::Error::other(format!("failed to load config: {err}")))?;
         let requirements = config.config_layer_stack.requirements().clone();
         let mut outcome = PluginImportOutcome::default();
-        let plugins_manager = plugins_manager_for_config(&config)
-            .with_plugin_install_source(PluginInstallSource::ExternalAgentMigration);
-        if let Some(analytics_events_client) = self.analytics_events_client.clone() {
-            plugins_manager.set_analytics_events_client(analytics_events_client);
-        }
+        let plugins_manager = plugins_manager_for_config(&config);
         let configured_marketplace_paths = plugins_manager
             .list_marketplaces_for_config(
                 &config.plugins_config_input(),
@@ -233,7 +228,7 @@ impl ExternalAgentConfigService {
                     Err(err) => {
                         let plugin_id = format!("{plugin_name}@{marketplace_name}");
                         outcome.failed_plugin_ids.push(plugin_id.clone());
-                        let sub_error_type = err.sub_error_type();
+                        let sub_error_type = None;
                         let mut raw_error = plugin_import_raw_error(
                             cwd,
                             "plugin_import",

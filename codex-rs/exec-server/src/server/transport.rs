@@ -23,11 +23,9 @@ use tracing::info;
 use tracing::warn;
 
 use crate::ExecServerRuntimePaths;
-use crate::ExecServerTelemetry;
 use crate::connection::JsonRpcConnection;
 use crate::server::RequestDispatchMode;
 use crate::server::processor::ConnectionProcessor;
-use crate::telemetry::ConnectionTransport;
 
 pub const DEFAULT_LISTEN_URL: &str = "ws://127.0.0.1:0";
 
@@ -84,7 +82,6 @@ pub(crate) fn parse_listen_url(
 pub(crate) async fn run_transport(
     listen_url: &str,
     runtime_paths: ExecServerRuntimePaths,
-    telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
     request_dispatch_mode: RequestDispatchMode,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -93,27 +90,19 @@ pub(crate) async fn run_transport(
             run_websocket_listener(
                 bind_address,
                 runtime_paths,
-                telemetry,
                 http_client_factory,
                 request_dispatch_mode,
             )
             .await
         }
         ExecServerListenTransport::Stdio => {
-            run_stdio_connection(
-                runtime_paths,
-                telemetry,
-                http_client_factory,
-                request_dispatch_mode,
-            )
-            .await
+            run_stdio_connection(runtime_paths, http_client_factory, request_dispatch_mode).await
         }
     }
 }
 
 async fn run_stdio_connection(
     runtime_paths: ExecServerRuntimePaths,
-    telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
     request_dispatch_mode: RequestDispatchMode,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -121,7 +110,6 @@ async fn run_stdio_connection(
         io::stdin(),
         io::stdout(),
         runtime_paths,
-        telemetry,
         http_client_factory,
         request_dispatch_mode,
     )
@@ -132,7 +120,6 @@ async fn run_stdio_connection_with_io<R, W>(
     reader: R,
     writer: W,
     runtime_paths: ExecServerRuntimePaths,
-    telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
     request_dispatch_mode: RequestDispatchMode,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
@@ -140,18 +127,15 @@ where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    let processor = ConnectionProcessor::new_with_telemetry(
-        runtime_paths,
-        telemetry,
-        http_client_factory,
-        request_dispatch_mode,
-    );
+    let processor =
+        ConnectionProcessor::new(runtime_paths, http_client_factory, request_dispatch_mode);
     tracing::info!("codex-exec-server listening on stdio");
     processor
-        .run_connection(
-            JsonRpcConnection::from_stdio(reader, writer, "exec-server stdio".to_string()),
-            ConnectionTransport::Stdio,
-        )
+        .run_connection(JsonRpcConnection::from_stdio(
+            reader,
+            writer,
+            "exec-server stdio".to_string(),
+        ))
         .await;
     // Stdio serves exactly one connection, so detached sessions cannot be resumed.
     processor.shutdown().await;
@@ -161,18 +145,13 @@ where
 async fn run_websocket_listener(
     bind_address: SocketAddr,
     runtime_paths: ExecServerRuntimePaths,
-    telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
     request_dispatch_mode: RequestDispatchMode,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
-    let processor = ConnectionProcessor::new_with_telemetry(
-        runtime_paths,
-        telemetry,
-        http_client_factory,
-        request_dispatch_mode,
-    );
+    let processor =
+        ConnectionProcessor::new(runtime_paths, http_client_factory, request_dispatch_mode);
     info!("codex-exec-server listening on ws://{local_addr}");
     println!("ws://{local_addr}");
     std::io::stdout().flush()?;
@@ -224,13 +203,10 @@ async fn websocket_upgrade_handler(
     websocket.on_upgrade(move |stream| async move {
         state
             .processor
-            .run_connection(
-                JsonRpcConnection::from_axum_websocket(
-                    stream,
-                    format!("exec-server websocket {peer_addr}"),
-                ),
-                ConnectionTransport::WebSocket,
-            )
+            .run_connection(JsonRpcConnection::from_axum_websocket(
+                stream,
+                format!("exec-server websocket {peer_addr}"),
+            ))
             .await;
     })
 }

@@ -18,9 +18,6 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_state::BackfillState;
 use codex_state::BackfillStats;
 use codex_state::BackfillStatus;
-use codex_state::DB_ERROR_METRIC;
-use codex_state::DB_METRIC_BACKFILL;
-use codex_state::DB_METRIC_BACKFILL_DURATION_MS;
 use codex_state::ExtractionOutcome;
 use codex_state::ThreadMetadataBuilder;
 use codex_state::apply_rollout_item;
@@ -169,10 +166,6 @@ pub(crate) async fn backfill_sessions_with_lease(
     default_provider: &str,
     backfill_lease_seconds: i64,
 ) {
-    let metric_client = codex_otel::global();
-    let timer = metric_client
-        .as_ref()
-        .and_then(|otel| otel.start_timer(DB_METRIC_BACKFILL_DURATION_MS, &[]).ok());
     let backfill_state = match runtime.get_backfill_state().await {
         Ok(state) => state,
         Err(err) => {
@@ -266,15 +259,6 @@ pub(crate) async fn backfill_sessions_with_lease(
             stats.scanned = stats.scanned.saturating_add(1);
             match extract_metadata_from_rollout(&rollout.path, default_provider).await {
                 Ok(outcome) => {
-                    if outcome.parse_errors > 0
-                        && let Some(ref metric_client) = metric_client
-                    {
-                        let _ = metric_client.counter(
-                            DB_ERROR_METRIC,
-                            outcome.parse_errors as i64,
-                            &[("stage", "backfill_sessions")],
-                        );
-                    }
                     let mut metadata = outcome.metadata;
                     metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
                     let memory_mode = outcome.memory_mode.unwrap_or_else(|| "enabled".to_string());
@@ -350,28 +334,6 @@ pub(crate) async fn backfill_sessions_with_lease(
         "state db backfill scanned={}, upserted={}, failed={}",
         stats.scanned, stats.upserted, stats.failed
     );
-    if let Some(metric_client) = metric_client {
-        let _ = metric_client.counter(
-            DB_METRIC_BACKFILL,
-            stats.upserted as i64,
-            &[("status", "upserted")],
-        );
-        let _ = metric_client.counter(
-            DB_METRIC_BACKFILL,
-            stats.failed as i64,
-            &[("status", "failed")],
-        );
-    }
-    if let Some(timer) = timer.as_ref() {
-        let status = if stats.failed == 0 {
-            "success"
-        } else if stats.upserted == 0 {
-            "failed"
-        } else {
-            "partial_failure"
-        };
-        let _ = timer.record(&[("status", status)]);
-    }
 }
 
 #[derive(Debug, Clone)]

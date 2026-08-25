@@ -130,8 +130,6 @@ use codex_git_utils::current_branch_name;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::local_git_branches;
 use codex_git_utils::recent_commits;
-use codex_otel::RuntimeMetricsSummary;
-use codex_otel::SessionTelemetry;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
@@ -508,7 +506,6 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) has_chatgpt_account: bool,
     pub(crate) has_codex_backend_auth: bool,
     pub(crate) model_catalog: Arc<ModelCatalog>,
-    pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
     pub(crate) status_account_display: Option<StatusAccountDisplay>,
     pub(crate) runtime_model_provider_base_url: Option<String>,
@@ -519,7 +516,6 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
     // Shared latch so we only warn once about invalid terminal-title item IDs.
     pub(crate) terminal_title_invalid_items_warned: Arc<AtomicBool>,
-    pub(crate) session_telemetry: SessionTelemetry,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -560,7 +556,6 @@ pub(crate) struct ChatWidget {
     has_chatgpt_account: bool,
     has_codex_backend_auth: bool,
     model_catalog: Arc<ModelCatalog>,
-    session_telemetry: SessionTelemetry,
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     status_account_display: Option<StatusAccountDisplay>,
@@ -705,11 +700,7 @@ pub(crate) struct ChatWidget {
     /// We require the second press to match this key so `Ctrl+C` followed by
     /// `Ctrl+D` (or vice versa) doesn't quit accidentally.
     quit_shortcut_key: Option<KeyBinding>,
-    // Runtime metrics accumulated across delta snapshots for the active turn.
-    turn_runtime_metrics: RuntimeMetricsSummary,
     last_rendered_width: std::cell::Cell<Option<u16>>,
-    // Feedback sink for /feedback
-    feedback: codex_feedback::CodexFeedback,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     // Current working directory (if known)
@@ -991,29 +982,6 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn open_feedback_note(
-        &mut self,
-        category: crate::app_event::FeedbackCategory,
-        include_logs: bool,
-    ) {
-        self.show_feedback_note(category, include_logs);
-    }
-
-    fn show_feedback_note(
-        &mut self,
-        category: crate::app_event::FeedbackCategory,
-        include_logs: bool,
-    ) {
-        let view = crate::bottom_pane::FeedbackNoteView::new(
-            category,
-            self.turn_lifecycle.last_turn_id.clone(),
-            self.app_event_tx.clone(),
-            include_logs,
-        );
-        self.bottom_pane.show_view(Box::new(view));
-        self.request_redraw();
-    }
-
     pub(crate) fn open_app_link_view(&mut self, params: crate::bottom_pane::AppLinkViewParams) {
         let view = crate::bottom_pane::AppLinkView::new_with_keymap(
             params,
@@ -1032,27 +1000,6 @@ impl ChatWidget {
         if removed_deferred || removed_visible {
             self.request_redraw();
         }
-    }
-
-    pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
-        let snapshot = self.feedback.snapshot(self.thread_id);
-        #[cfg(target_os = "windows")]
-        let include_windows_sandbox_log =
-            codex_windows_sandbox::current_log_file_path_for_codex_home(&self.config.codex_home)
-                .is_file();
-        #[cfg(not(target_os = "windows"))]
-        let include_windows_sandbox_log = false;
-        let params = crate::bottom_pane::feedback_upload_consent_params(
-            self.app_event_tx.clone(),
-            category,
-            self.current_rollout_path.clone(),
-            self.thread_id
-                .map(|thread_id| format!("auto-review-rollout-{thread_id}.jsonl")),
-            include_windows_sandbox_log,
-            snapshot.feedback_diagnostics(),
-        );
-        self.bottom_pane.show_selection_view(params);
-        self.request_redraw();
     }
 
     pub(crate) fn open_multi_agent_enable_prompt(&mut self) {
@@ -1972,15 +1919,6 @@ impl ChatWidget {
     pub(crate) fn clear_token_usage(&mut self) {
         self.token_info = None;
     }
-}
-
-fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
-    summary.responses_api_overhead_ms > 0
-        || summary.responses_api_inference_time_ms > 0
-        || summary.responses_api_engine_iapi_ttft_ms > 0
-        || summary.responses_api_engine_service_ttft_ms > 0
-        || summary.responses_api_engine_iapi_tbt_ms > 0.0
-        || summary.responses_api_engine_service_tbt_ms > 0.0
 }
 
 impl Drop for ChatWidget {

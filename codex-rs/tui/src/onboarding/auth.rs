@@ -1071,7 +1071,6 @@ mod tests {
                 /*enable_codex_api_key_env*/ false,
             )
             .await,
-            feedback: codex_feedback::CodexFeedback::new(),
             log_db: None,
             state_db: None,
             environment_manager: Arc::new(

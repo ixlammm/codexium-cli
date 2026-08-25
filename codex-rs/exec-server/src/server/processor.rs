@@ -20,59 +20,45 @@ use crate::server::registry::build_router;
 use crate::server::request_dispatcher::RequestDispatcher;
 use crate::server::request_dispatcher::RequestTaskResult;
 use crate::server::session_registry::SessionRegistry;
-use crate::telemetry::ConnectionTransport;
-use crate::telemetry::ExecServerTelemetry;
 use codex_http_client::HttpClientFactory;
 
 #[derive(Clone)]
 pub(crate) struct ConnectionProcessor {
     session_registry: Arc<SessionRegistry>,
     runtime_paths: ExecServerRuntimePaths,
-    telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
     request_dispatch_mode: RequestDispatchMode,
 }
 
 impl ConnectionProcessor {
     #[cfg(test)]
-    pub(crate) fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
-        Self::new_with_telemetry(
+    pub(crate) fn new_for_tests(runtime_paths: ExecServerRuntimePaths) -> Self {
+        Self::new(
             runtime_paths,
-            ExecServerTelemetry::default(),
-            codex_http_client::HttpClientFactory::new(
-                codex_http_client::OutboundProxyPolicy::ReqwestDefault,
-            ),
+            HttpClientFactory::new(codex_http_client::OutboundProxyPolicy::ReqwestDefault),
             RequestDispatchMode::Inline,
         )
     }
 
-    pub(crate) fn new_with_telemetry(
+    pub(crate) fn new(
         runtime_paths: ExecServerRuntimePaths,
-        telemetry: ExecServerTelemetry,
         http_client_factory: HttpClientFactory,
         request_dispatch_mode: RequestDispatchMode,
     ) -> Self {
         Self {
-            session_registry: SessionRegistry::new(telemetry.clone()),
+            session_registry: SessionRegistry::new(),
             runtime_paths,
-            telemetry,
             http_client_factory,
             request_dispatch_mode,
         }
     }
 
-    pub(crate) async fn run_connection(
-        &self,
-        connection: JsonRpcConnection,
-        transport: ConnectionTransport,
-    ) {
+    pub(crate) async fn run_connection(&self, connection: JsonRpcConnection) {
         run_connection(
             connection,
             Arc::clone(&self.session_registry),
             self.runtime_paths.clone(),
-            self.telemetry.clone(),
             self.http_client_factory.clone(),
-            transport,
             self.request_dispatch_mode,
         )
         .await;
@@ -87,12 +73,9 @@ async fn run_connection(
     connection: JsonRpcConnection,
     session_registry: Arc<SessionRegistry>,
     runtime_paths: ExecServerRuntimePaths,
-    telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
-    transport: ConnectionTransport,
     request_dispatch_mode: RequestDispatchMode,
 ) {
-    let _connection_metrics = telemetry.connection_started(transport);
     let JsonRpcConnection {
         outgoing_tx: json_outgoing_tx,
         mut incoming_rx,
@@ -132,7 +115,6 @@ async fn run_connection(
         outgoing_tx.clone(),
         disconnected_rx.clone(),
         requests.clone(),
-        telemetry,
         request_dispatch_mode,
     );
 
@@ -284,7 +266,7 @@ mod tests {
 
     #[tokio::test]
     async fn connection_accepts_pipelined_scalar_requests() {
-        let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
+        let registry = SessionRegistry::new();
         let (mut writer, mut lines, task) = spawn_test_connection(registry, "pipelined-scalar");
 
         send_request(
@@ -378,7 +360,7 @@ mod tests {
 
     #[tokio::test]
     async fn transport_disconnect_detaches_session_during_in_flight_read() {
-        let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
+        let registry = SessionRegistry::new();
         let (mut first_writer, mut first_lines, first_task) =
             spawn_test_connection(Arc::clone(&registry), "first");
 
@@ -478,11 +460,9 @@ mod tests {
             connection,
             registry,
             test_runtime_paths(),
-            crate::ExecServerTelemetry::default(),
             codex_http_client::HttpClientFactory::new(
                 codex_http_client::OutboundProxyPolicy::ReqwestDefault,
             ),
-            crate::telemetry::ConnectionTransport::Stdio,
             RequestDispatchMode::Inline,
         ));
         (client_writer, BufReader::new(client_reader).lines(), task)

@@ -100,10 +100,8 @@ pub(crate) struct SessionConfiguration {
     /// Optional user-facing name for the thread, updated during the session.
     pub(super) thread_name: Option<String>,
 
-    // TODO(pakrym): Remove config from here
+    // TODO(pakrym): Remove config from here
     pub(super) original_config_do_not_use: Arc<Config>,
-    /// Optional service name tag for session metrics.
-    pub(super) metrics_service_name: Option<String>,
     pub(super) app_server_client_name: Option<String>,
     pub(super) app_server_client_version: Option<String>,
     /// Guardian reviewer identity is trusted only when established during an in-memory spawn.
@@ -526,11 +524,6 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) app_server_client_version: Option<String>,
 }
 
-pub(crate) struct AppServerClientMetadata {
-    pub(crate) client_name: Option<String>,
-    pub(crate) client_version: Option<String>,
-}
-
 async fn warm_plugins_and_skills_for_session_init(
     config: Arc<Config>,
     plugins_manager: Arc<PluginsManager>,
@@ -594,7 +587,6 @@ impl Session {
         agent_control: AgentControl,
         environment_manager: Arc<EnvironmentManager>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
-        analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
@@ -945,35 +937,12 @@ impl Session {
             ) {
                 post_session_configured_events.push(event);
             }
-            let telemetry_auth = auth.as_ref();
-            let auth_mode = telemetry_auth
-                .map(CodexAuth::auth_mode)
-                .map(TelemetryAuthMode::from);
-            let account_id = telemetry_auth.and_then(CodexAuth::get_account_id);
-            let account_email = telemetry_auth.and_then(CodexAuth::get_account_email);
+            let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
+            let account_id = auth.as_ref().and_then(CodexAuth::get_account_id);
+            let account_email = auth.as_ref().and_then(CodexAuth::get_account_email);
             let originator = session_configuration.originator.clone();
             let terminal_type = user_agent();
             let session_model = session_configuration.collaboration_mode.model().to_string();
-            let auth_env_telemetry = collect_auth_env_telemetry(
-                session_configuration.provider.info(),
-                auth_manager.codex_api_key_env_enabled(),
-            );
-            let mut session_telemetry = SessionTelemetry::new(
-                thread_id,
-                session_model.as_str(),
-                session_model.as_str(),
-                account_id.clone(),
-                account_email.clone(),
-                auth_mode,
-                originator.clone(),
-                config.otel.log_user_prompt,
-                terminal_type.clone(),
-                session_configuration.session_source.clone(),
-            )
-            .with_auth_env(auth_env_telemetry.to_otel_metadata());
-            if let Some(service_name) = session_configuration.metrics_service_name.as_deref() {
-                session_telemetry = session_telemetry.with_metrics_service_name(service_name);
-            }
             let network_proxy_audit_metadata = NetworkProxyAuditMetadata {
                 conversation_id: Some(thread_id.to_string()),
                 app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -985,41 +954,6 @@ impl Session {
                 model: Some(session_model.clone()),
                 slug: Some(session_model),
             };
-            config.features.emit_metrics(&session_telemetry);
-            session_telemetry.counter(
-                THREAD_STARTED_METRIC,
-                /*inc*/ 1,
-                &[(
-                    "is_git",
-                    if get_git_repo_root(session_configuration.cwd()).is_some() {
-                        "true"
-                    } else {
-                        "false"
-                    },
-                )],
-            );
-
-            let mcp_server_names =
-                codex_mcp::effective_mcp_servers(
-                    &mcp_projection.config,
-                    auth.as_ref(),
-                )
-                    .into_keys()
-                    .collect::<Vec<_>>();
-            session_telemetry.conversation_starts(
-                config.model_provider.name.as_str(),
-                session_configuration.collaboration_mode.reasoning_effort(),
-                config
-                    .model_reasoning_summary
-                    .unwrap_or(ReasoningSummaryConfig::Auto),
-                config.model_context_window,
-                config.model_auto_compact_token_limit,
-                config.permissions.approval_policy.value(),
-                config
-                    .permissions
-                    .legacy_sandbox_policy(session_configuration.cwd().as_path()),
-                mcp_server_names.iter().map(String::as_str).collect(),
-            );
 
             let use_zsh_fork_shell = config.features.enabled(Feature::ShellZshFork);
             let default_shell = if let Some(user_shell_override) =
@@ -1046,7 +980,6 @@ impl Session {
                 ShellSnapshot::new(
                     config.codex_home.clone(),
                     thread_id,
-                    session_telemetry.clone(),
                     state_db_ctx.clone(),
                 )
             } else {
@@ -1172,23 +1105,14 @@ impl Session {
                 });
             }
 
-            let analytics_events_client = analytics_events_client.unwrap_or_else(|| {
-                AnalyticsEventsClient::new(
-                    Arc::clone(&auth_manager),
-                    config.chatgpt_base_url.trim_end_matches('/').to_string(),
-                    config.analytics_enabled,
-                )
-            });
             // Extensions need a stable thread-owned resource client before the Session exists.
             let mcp_runtime = Arc::new(McpRuntime::empty(
                 mcp_projection.config.prefix_mcp_tool_names,
             ));
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
-            session_extension_data.insert(analytics_events_client.clone());
             let mcp_resource_client = Arc::new(McpResourceClient::new(Arc::clone(&mcp_runtime)));
-            let extension_metrics =
-                extension_metrics::from_session_telemetry(session_telemetry.clone());
+            let extension_metrics = extension_metrics::noop_extension_metrics();
             for contributor in extensions.thread_lifecycle_contributors() {
                 contributor.on_thread_start(codex_extension_api::ThreadStartInput {
                     config: config.as_ref(),
@@ -1217,7 +1141,6 @@ impl Session {
                 elicitations: crate::elicitation::ElicitationService::new(),
                 shell_zsh_path: config.zsh_path.clone(),
                 main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
-                analytics_events_client,
                 hooks: arc_swap::ArcSwap::from_pointee(hooks),
                 rollout_thread_trace,
                 user_shell: Arc::new(default_shell),
@@ -1229,7 +1152,6 @@ impl Session {
                     ClientRouteClass::Api,
                 )
                 .with_legacy_custom_ca_fallback(),
-                session_telemetry,
                 models_manager: Arc::clone(&models_manager),
                 tool_approvals: Mutex::new(ApprovalStore::default()),
                 guardian_rejection_circuit_breaker: Mutex::new(Default::default()),

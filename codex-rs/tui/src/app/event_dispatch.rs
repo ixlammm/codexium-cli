@@ -214,11 +214,6 @@ impl App {
                 return Ok(self.delete_current_thread(app_server).await);
             }
             AppEvent::ForkCurrentSession { name } => {
-                self.session_telemetry.counter(
-                    "codex.thread.fork",
-                    /*inc*/ 1,
-                    &[("source", "slash_command")],
-                );
                 let summary = session_summary(
                     self.chat_widget.token_usage(),
                     self.chat_widget.thread_id(),
@@ -312,11 +307,6 @@ impl App {
                 if self.chat_widget.thread_id() != Some(thread_id) {
                     return Ok(AppRunControl::Continue);
                 }
-                self.session_telemetry.counter(
-                    "codex.thread.fork",
-                    /*inc*/ 1,
-                    &[("source", "transcript")],
-                );
                 self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                     .await;
                 let config = self.fresh_session_config();
@@ -1343,32 +1333,6 @@ impl App {
                     failed_scan,
                 );
             }
-            AppEvent::OpenFeedbackNote {
-                category,
-                include_logs,
-            } => {
-                self.chat_widget.open_feedback_note(category, include_logs);
-            }
-            AppEvent::OpenFeedbackConsent { category } => {
-                self.chat_widget.open_feedback_consent(category);
-            }
-            AppEvent::SubmitFeedback {
-                category,
-                reason,
-                turn_id,
-                include_logs,
-            } => {
-                self.submit_feedback(app_server, category, reason, turn_id, include_logs);
-            }
-            AppEvent::FeedbackSubmitted {
-                origin_thread_id,
-                category,
-                include_logs,
-                result,
-            } => {
-                self.handle_feedback_submitted(origin_thread_id, category, include_logs, result)
-                    .await;
-            }
             AppEvent::LaunchExternalEditor => {
                 if self.chat_widget.external_editor_state() == ExternalEditorState::Active {
                     self.launch_external_editor(tui).await;
@@ -1385,19 +1349,7 @@ impl App {
                 preset,
                 profile_selection,
             } => {
-                self.session_telemetry.counter(
-                    "codex.windows_sandbox.fallback_prompt_shown",
-                    /*inc*/ 1,
-                    &[],
-                );
                 self.chat_widget.clear_windows_sandbox_setup_status();
-                if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
-                    self.session_telemetry.record_duration(
-                        "codex.windows_sandbox.elevated_setup_duration_ms",
-                        started_at.elapsed(),
-                        &[("result", "failure")],
-                    );
-                }
                 self.chat_widget
                     .open_windows_sandbox_fallback_prompt(preset, profile_selection);
             }
@@ -1456,8 +1408,6 @@ impl App {
                     }
 
                     self.chat_widget.show_windows_sandbox_setup_status();
-                    self.windows_sandbox.setup_started_at = Some(Instant::now());
-                    let session_telemetry = self.session_telemetry.clone();
                     tokio::task::spawn_blocking(move || {
                         let result = crate::windows_sandbox::run_elevated_setup(
                             &permission_profile,
@@ -1467,41 +1417,12 @@ impl App {
                             codex_home.as_path(),
                         );
                         let event = match result {
-                            Ok(()) => {
-                                session_telemetry.counter(
-                                    "codex.windows_sandbox.elevated_setup_success",
-                                    /*inc*/ 1,
-                                    &[],
-                                );
-                                AppEvent::EnableWindowsSandboxForAgentMode {
-                                    preset: preset.clone(),
-                                    mode: WindowsSandboxEnableMode::Elevated,
-                                    profile_selection: profile_selection.clone(),
-                                }
-                            }
+                            Ok(()) => AppEvent::EnableWindowsSandboxForAgentMode {
+                                preset: preset.clone(),
+                                mode: WindowsSandboxEnableMode::Elevated,
+                                profile_selection: profile_selection.clone(),
+                            },
                             Err(err) => {
-                                let mut code_tag: Option<String> = None;
-                                let mut message_tag: Option<String> = None;
-                                if let Some((code, message)) =
-                                    crate::windows_sandbox::elevated_setup_failure_details(&err)
-                                {
-                                    code_tag = Some(code);
-                                    message_tag = Some(message);
-                                }
-                                let mut tags: Vec<(&str, &str)> = Vec::new();
-                                if let Some(code) = code_tag.as_deref() {
-                                    tags.push(("code", code));
-                                }
-                                if let Some(message) = message_tag.as_deref() {
-                                    tags.push(("message", message));
-                                }
-                                session_telemetry.counter(
-                                    crate::windows_sandbox::elevated_setup_failure_metric_name(
-                                        &err,
-                                    ),
-                                    /*inc*/ 1,
-                                    &tags,
-                                );
                                 tracing::error!(
                                     error = %err,
                                     "failed to run elevated Windows sandbox setup"
@@ -1562,7 +1483,6 @@ impl App {
                         std::env::vars().collect();
                     let codex_home = self.config.codex_home.clone();
                     let tx = self.app_event_tx.clone();
-                    let session_telemetry = self.session_telemetry.clone();
 
                     self.chat_widget.show_windows_sandbox_setup_status();
                     tokio::task::spawn_blocking(move || {
@@ -1575,11 +1495,6 @@ impl App {
                                 &env_map,
                             )
                         {
-                            session_telemetry.counter(
-                                "codex.windows_sandbox.legacy_setup_preflight_failed",
-                                /*inc*/ 1,
-                                &[],
-                            );
                             tracing::warn!(
                                 error = %err,
                                 "failed to preflight non-admin Windows sandbox setup"
@@ -1662,13 +1577,6 @@ impl App {
                 #[cfg(target_os = "windows")]
                 {
                     self.chat_widget.clear_windows_sandbox_setup_status();
-                    if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
-                        self.session_telemetry.record_duration(
-                            "codex.windows_sandbox.elevated_setup_duration_ms",
-                            started_at.elapsed(),
-                            &[("result", "success")],
-                        );
-                    }
                     let selected_mode = match mode {
                         WindowsSandboxEnableMode::Elevated => WindowsSandboxModeToml::Elevated,
                         WindowsSandboxEnableMode::Legacy => WindowsSandboxModeToml::Unelevated,

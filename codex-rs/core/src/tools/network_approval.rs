@@ -24,7 +24,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::WarningEvent;
 use codex_sandboxing::record_network_sandbox_violation;
-use codex_tools::ToolName;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -713,14 +712,6 @@ impl NetworkApprovalService {
                 })
         };
         let approval_call_id = format!("{guardian_approval_id}#{}", Uuid::new_v4());
-        let telemetry_call_id = owner_call.as_ref().map_or_else(
-            || Uuid::new_v4().to_string(),
-            |call| call.trigger.call_id.clone(),
-        );
-        let telemetry_tool_name = owner_call.as_ref().map_or_else(
-            || "network_access".to_string(),
-            |call| call.trigger.tool_name.clone(),
-        );
         let action = ApprovalAction::NetworkAccess {
             id: guardian_approval_id,
             turn_id: turn_context.sub_id.clone(),
@@ -738,7 +729,6 @@ impl NetworkApprovalService {
         let approval_context = ApprovalContext {
             review_context: GuardianReviewContext::from(&turn_context),
             call_id: approval_call_id,
-            tool_name: ToolName::plain(telemetry_tool_name.clone()),
             strict_auto_review,
             approval_reason: Some(prompt_reason),
             retry_reason: Some(policy_denial_message.clone()),
@@ -751,24 +741,10 @@ impl NetworkApprovalService {
                     self.record_call_outcome(&owner_call.registration_id, rejection)
                         .await;
                 }
-                turn_context.session_telemetry.tool_decision(
-                    &telemetry_tool_name,
-                    &telemetry_call_id,
-                    &ReviewDecision::denied("network approval was rejected"),
-                    /*source*/ None,
-                );
                 pending_owner.complete(PendingApprovalDecision::Deny);
                 return NetworkDecision::deny(REASON_NOT_ALLOWED);
             }
             Err(ToolError::Codex(err)) => {
-                let telemetry_decision = if matches!(
-                    err.details(),
-                    codex_protocol::error::CodexErrorDetails::TurnAborted
-                ) {
-                    ReviewDecision::Abort
-                } else {
-                    ReviewDecision::denied("network approval failed")
-                };
                 if let Some(owner_call) = owner_call.as_ref() {
                     let rejection = if matches!(
                         err.details(),
@@ -781,12 +757,6 @@ impl NetworkApprovalService {
                     self.record_call_outcome(&owner_call.registration_id, rejection)
                         .await;
                 }
-                turn_context.session_telemetry.tool_decision(
-                    &telemetry_tool_name,
-                    &telemetry_call_id,
-                    &telemetry_decision,
-                    /*source*/ None,
-                );
                 pending_owner.complete(PendingApprovalDecision::Deny);
                 return NetworkDecision::deny(REASON_NOT_ALLOWED);
             }
@@ -803,8 +773,6 @@ impl NetworkApprovalService {
         } else {
             None
         };
-        let mut telemetry_decision = approval_decision.clone();
-        let mut network_policy_amendment_applied = false;
         let resolved = match approval_decision {
             ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                 if self.session_denied_hosts.lock().await.contains(&key) {
@@ -851,7 +819,6 @@ impl NetworkApprovalService {
                         .await
                     {
                         Ok(()) => {
-                            network_policy_amendment_applied = true;
                             session
                                 .record_network_policy_amendment_message(
                                     &turn_context.sub_id,
@@ -901,7 +868,6 @@ impl NetworkApprovalService {
                         .await
                     {
                         Ok(()) => {
-                            network_policy_amendment_applied = true;
                             session
                                 .record_network_policy_amendment_message(
                                     &turn_context.sub_id,
@@ -952,30 +918,6 @@ impl NetworkApprovalService {
             }
         };
         pending_owner.set_decision_on_drop(resolved);
-
-        let decision_was_network_policy_amendment = matches!(
-            &telemetry_decision,
-            ReviewDecision::NetworkPolicyAmendment { .. }
-        );
-        if decision_was_network_policy_amendment && !network_policy_amendment_applied {
-            telemetry_decision = match resolved {
-                PendingApprovalDecision::AllowOnce => ReviewDecision::Approved,
-                PendingApprovalDecision::AllowForSession => ReviewDecision::ApprovedForSession,
-                PendingApprovalDecision::Deny => {
-                    ReviewDecision::denied("network approval was not applied")
-                }
-            };
-        } else if matches!(resolved, PendingApprovalDecision::Deny)
-            && !decision_was_network_policy_amendment
-        {
-            telemetry_decision = ReviewDecision::denied("network approval was not applied");
-        }
-        turn_context.session_telemetry.tool_decision(
-            &telemetry_tool_name,
-            &telemetry_call_id,
-            &telemetry_decision,
-            /*source*/ None,
-        );
         pending_owner.complete(resolved);
 
         resolved.to_network_decision()

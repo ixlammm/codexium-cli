@@ -16,7 +16,6 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use std::time::Instant;
 
 use crate::codex_apps::normalize_codex_apps_callable_name;
 use crate::codex_apps::normalize_codex_apps_callable_namespace;
@@ -28,7 +27,6 @@ use crate::mcp::ToolPluginProvenance;
 use crate::openai_docs_source_attribution::maybe_with_openai_docs_source_attribution;
 use crate::pagination::collect_paginated_with_limit;
 use crate::runtime::McpRuntimeContext;
-use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
 use crate::server::has_explicit_http_authorization;
 use crate::tool_catalog_cache::McpToolCatalogCacheContext;
@@ -46,7 +44,6 @@ use codex_config::McpServerTransportConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_connectors::ConnectorRuntimeContext;
-use codex_connectors::ConnectorRuntimeFetchSource;
 use codex_exec_server::Environment;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::McpServerInfo;
@@ -84,10 +81,6 @@ pub const MCP_SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
 /// not use it. Its `cacheable: false` property disables sharing tool definitions across connections.
 const MCP_TOOL_CATALOG_CACHE_CAPABILITY: &str = "codex/tool-catalog-cache";
 const MCP_TOOL_CATALOG_CACHEABLE_PROPERTY: &str = "cacheable";
-pub(crate) const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
-pub(crate) const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str =
-    "codex.mcp.tools.fetch_uncached.duration_ms";
-pub(crate) const CODEX_APPS_REFRESH_DURATION_METRIC: &str = "codex.apps.refresh.duration_ms";
 pub(crate) const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -115,26 +108,12 @@ pub(crate) struct ManagedClient {
 
 impl ManagedClient {
     pub(crate) fn listed_tools(&self) -> Vec<ToolInfo> {
-        let total_start = Instant::now();
         if let Some(tools) = self
             .codex_apps_tools_cache_context
             .as_ref()
             .and_then(ConnectorRuntimeContext::current_tools)
         {
-            emit_duration(
-                MCP_TOOLS_LIST_DURATION_METRIC,
-                total_start.elapsed(),
-                &[("cache", "hit")],
-            );
             return tools;
-        }
-
-        if self.codex_apps_tools_cache_context.is_some() {
-            emit_duration(
-                MCP_TOOLS_LIST_DURATION_METRIC,
-                total_start.elapsed(),
-                &[("cache", "miss")],
-            );
         }
 
         self.tools.clone()
@@ -320,7 +299,6 @@ impl ManagedClientStartup {
             let tool_catalog_fetch_ticket = tool_catalog_cache_context
                 .as_ref()
                 .map(McpToolCatalogCacheContext::begin_fetch);
-            let refresh_start = is_codex_apps_mcp_server.then(Instant::now);
             let outcome = match async {
                 if let Err(error) = validate_mcp_server_name(&server_name) {
                     return Err(error.into());
@@ -372,16 +350,6 @@ impl ManagedClientStartup {
                 Ok(result) => result,
                 Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
             };
-            if outcome.is_ok()
-                && let Some(refresh_start) = refresh_start
-            {
-                emit_duration(
-                    CODEX_APPS_REFRESH_DURATION_METRIC,
-                    refresh_start.elapsed(),
-                    &[("path", "legacy"), ("trigger", "initial")],
-                );
-            }
-
             startup_complete.store(true, Ordering::Release);
             outcome
         }
@@ -609,13 +577,11 @@ impl From<anyhow::Error> for StartupOutcomeError {
 pub(crate) async fn list_tools_for_client_uncached(
     server_name: &str,
     is_codex_apps_mcp_server: bool,
-    codex_apps_refresh_trigger: &'static str,
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
     catalog_item_limit: usize,
     server_instructions: Option<&str>,
 ) -> Result<Vec<ToolInfo>> {
-    let fetch_start = Instant::now();
     let protocol_mode = client.protocol_mode();
     let tools = collect_paginated_with_limit("tools/list", timeout, catalog_item_limit, |params| {
         let client = Arc::clone(client);
@@ -641,19 +607,6 @@ pub(crate) async fn list_tools_for_client_uncached(
         )
     })
     .collect();
-    if is_codex_apps_mcp_server {
-        emit_duration(
-            MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
-            fetch_start.elapsed(),
-            &[("trigger", codex_apps_refresh_trigger)],
-        );
-    } else {
-        emit_duration(
-            MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
-            fetch_start.elapsed(),
-            &[],
-        );
-    }
     Ok(tools)
 }
 
@@ -903,14 +856,12 @@ async fn start_server_task(
         .as_ref()
         .and_then(|exp| exp.get(MCP_SANDBOX_STATE_META_CAPABILITY))
         .is_some();
-    let list_start = Instant::now();
     let fetch_ticket = codex_apps_tools_cache_context
         .as_ref()
-        .map(|cache_context| cache_context.begin_fetch(ConnectorRuntimeFetchSource::Startup));
+        .map(ConnectorRuntimeContext::begin_fetch);
     let client_tools = list_tools_for_client_uncached(
         &server_name,
         is_codex_apps_mcp_server,
-        /*codex_apps_refresh_trigger*/ "initial",
         &client,
         startup_timeout,
         catalog_item_limit,
@@ -929,19 +880,11 @@ async fn start_server_task(
         (None, None) => client_tools.clone(),
         _ => unreachable!("Codex Apps fetch ticket requires cache context"),
     };
-    let has_shared_tool_catalog = is_codex_apps_mcp_server || tool_catalog_cache_context.is_some();
     if let (Some(cache_context), Some(fetch_ticket)) = (
         tool_catalog_cache_context.as_ref(),
         tool_catalog_fetch_ticket,
     ) {
         cache_context.publish_if_newest(fetch_ticket, &shared_tools);
-    }
-    if has_shared_tool_catalog {
-        emit_duration(
-            MCP_TOOLS_LIST_DURATION_METRIC,
-            list_start.elapsed(),
-            &[("cache", "miss")],
-        );
     }
     let managed = ManagedClient {
         client: Arc::clone(&client),

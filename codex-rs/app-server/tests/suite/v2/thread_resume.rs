@@ -127,12 +127,7 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-use super::analytics::assert_basic_thread_initialized_event;
 use super::analytics::mount_analytics_capture;
-use super::analytics::thread_initialized_event;
-use super::analytics::wait_for_analytics_payload;
-use super::analytics::wait_for_goal_event;
-use super::analytics::wait_for_matching_analytics_event;
 
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
@@ -1389,7 +1384,7 @@ async fn goal_first_live_thread_appears_in_state_db_thread_list() -> Result<()> 
 }
 
 #[tokio::test]
-async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
+async fn thread_resume_preserves_thread_source_and_originator() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let codex_home = TempDir::new()?;
@@ -1434,23 +1429,11 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
     );
     assert_eq!(thread.thread_source, Some(ThreadSource::User));
 
-    let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
-    let event = thread_initialized_event(&payload)?;
-    assert_basic_thread_initialized_event(
-        event,
-        &thread.id,
-        &thread.session_id,
-        "codex_work_desktop",
-        "gpt-5.4",
-        "resumed",
-        "user",
-    );
-    assert_eq!(event["event_params"]["thread_source"], "user");
     Ok(())
 }
 
 #[tokio::test]
-async fn thread_resume_running_thread_tracks_thread_originator_in_analytics() -> Result<()> {
+async fn thread_resume_running_thread_excludes_turns() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let codex_home = TempDir::new()?;
@@ -1509,21 +1492,6 @@ async fn thread_resume_running_thread_tracks_thread_originator_in_analytics() ->
         thread: resumed, ..
     } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
 
-    let event = wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
-        event["event_type"] == "codex_thread_initialized"
-            && event["event_params"]["thread_id"] == resumed.id
-            && event["event_params"]["initialization_mode"] == "resumed"
-    })
-    .await?;
-    assert_basic_thread_initialized_event(
-        &event,
-        &resumed.id,
-        &resumed.session_id,
-        "codex_work_desktop",
-        "mock-model",
-        "resumed",
-        "user",
-    );
     Ok(())
 }
 
@@ -2429,7 +2397,7 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
 }
 
 #[tokio::test]
-async fn thread_goal_lifecycle_emits_analytics_and_clear_deletes_goal() -> Result<()> {
+async fn thread_goal_lifecycle_clear_deletes_goal() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(vec![
         responses::sse(vec![
             responses::ev_response_created("materialize-thread"),
@@ -2508,55 +2476,6 @@ async fn thread_goal_lifecycle_emits_analytics_and_clear_deletes_goal() -> Resul
     )
     .await??;
 
-    let created = wait_for_goal_event(&server, DEFAULT_READ_TIMEOUT, "created", "active").await?;
-    let persisted_goal_id = created["event_params"]["goal_id"]
-        .as_str()
-        .expect("created goal id");
-    assert_eq!(created["event_params"]["thread_id"], thread.id);
-    assert_eq!(created["event_params"]["turn_id"], serde_json::Value::Null);
-    assert_eq!(created["event_params"]["has_token_budget"], true);
-    assert!(created["event_params"]["session_id"].is_string());
-    assert!(created["event_params"]["app_server_client"].is_object());
-    assert!(created["event_params"]["runtime"].is_object());
-    assert!(created["event_params"].get("objective").is_none());
-    assert!(created["event_params"].get("token_budget").is_none());
-
-    let usage = wait_for_goal_event(
-        &server,
-        DEFAULT_READ_TIMEOUT,
-        "usage_accounted",
-        "budget_limited",
-    )
-    .await?;
-    let causal_turn_id = usage["event_params"]["turn_id"]
-        .as_str()
-        .expect("accounted usage turn id");
-    assert_eq!(usage["event_params"]["goal_id"], persisted_goal_id);
-    assert_eq!(usage["event_params"]["cumulative_tokens_accounted"], 200);
-    assert!(
-        usage["event_params"]["cumulative_time_accounted_seconds"]
-            .as_i64()
-            .is_some()
-    );
-
-    let status = wait_for_goal_event(
-        &server,
-        DEFAULT_READ_TIMEOUT,
-        "status_changed",
-        "budget_limited",
-    )
-    .await?;
-    assert_eq!(status["event_params"]["goal_id"], persisted_goal_id);
-    assert_eq!(status["event_params"]["turn_id"], causal_turn_id);
-    assert_eq!(
-        status["event_params"]["cumulative_tokens_accounted"],
-        serde_json::Value::Null
-    );
-    assert_eq!(
-        status["event_params"]["cumulative_time_accounted_seconds"],
-        serde_json::Value::Null
-    );
-
     let clear_id = mcp
         .send_raw_request(
             "thread/goal/clear",
@@ -2574,11 +2493,6 @@ async fn thread_goal_lifecycle_emits_analytics_and_clear_deletes_goal() -> Resul
         mcp.read_stream_until_notification_message("thread/goal/cleared"),
     )
     .await??;
-
-    let cleared =
-        wait_for_goal_event(&server, DEFAULT_READ_TIMEOUT, "cleared", "budget_limited").await?;
-    assert_eq!(cleared["event_params"]["goal_id"], persisted_goal_id);
-    assert_eq!(cleared["event_params"]["turn_id"], serde_json::Value::Null);
 
     let get_id = mcp
         .send_raw_request(

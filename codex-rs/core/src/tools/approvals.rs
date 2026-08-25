@@ -14,7 +14,6 @@ use crate::mcp_tool_call::request_mcp_tool_user_approval;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use crate::tools::flat_tool_name;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::runtimes::apply_patch::ApplyPatchApprovalKey;
 use crate::tools::runtimes::shell::ApprovalKey;
@@ -23,10 +22,8 @@ use crate::tools::sandboxing::ApprovalRequestReasons;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::with_cached_approval;
-use codex_analytics::GuardianApprovalRequestSource;
 use codex_config::types::AppToolApproval;
 use codex_hooks::PermissionRequestDecision;
-use codex_otel::ToolDecisionSource;
 use codex_protocol::approvals::ExecPolicyAmendment;
 #[cfg(unix)]
 use codex_protocol::approvals::GuardianCommandSource;
@@ -39,7 +36,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
-use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
@@ -53,7 +49,6 @@ use tracing::warn;
 pub(crate) struct ApprovalContext {
     pub(crate) review_context: GuardianReviewContext,
     pub(crate) call_id: String,
-    pub(crate) tool_name: ToolName,
     pub(crate) strict_auto_review: bool,
     pub(crate) approval_reason: Option<String>,
     pub(crate) retry_reason: Option<String>,
@@ -485,10 +480,6 @@ impl Session {
             },
             None => self.request_reviewer_approval(action, &ctx).await,
         };
-        // Network approvals record their final telemetry after validation and persistence.
-        if !is_network_approval {
-            record_resolution(&ctx, &resolution);
-        }
         if is_mcp_tool_call && resolution.decision == ReviewDecision::ApprovedMcpPolicyAmendment {
             return Ok(resolution.decision);
         }
@@ -574,7 +565,6 @@ impl Session {
                     retry_reason,
                     GuardianReviewOptions {
                         plugin_attribution_override: None,
-                        approval_request_source: GuardianApprovalRequestSource::MainTurn,
                         external_cancel: Some(review_cancel),
                     },
                 )
@@ -766,21 +756,6 @@ impl Session {
             }
         }
     }
-}
-
-fn record_resolution(ctx: &ApprovalContext, resolution: &ApprovalResolution) {
-    let source = match resolution.source {
-        ApprovalResolutionSource::Hook => ToolDecisionSource::Config,
-        ApprovalResolutionSource::Guardian => ToolDecisionSource::AutomatedReviewer,
-        ApprovalResolutionSource::User => ToolDecisionSource::User,
-    };
-    let tool_name = flat_tool_name(&ctx.tool_name);
-    ctx.review_context.turn().session_telemetry.tool_decision(
-        tool_name.as_ref(),
-        &ctx.call_id,
-        &resolution.decision,
-        Some(source),
-    );
 }
 
 #[cfg(all(test, unix))]

@@ -14,13 +14,11 @@ workspace = true
 
 [dependencies]
 chrono = { workspace = true }
-codex-analytics = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-hooks = { workspace = true }
 codex-memories-write = { workspace = true }
-codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rollout = { workspace = true }

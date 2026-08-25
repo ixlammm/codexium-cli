@@ -10,6 +10,7 @@ use crate::mcp::McpRuntimeProjection;
 use codex_mcp::ElicitationReviewerHandle;
 use codex_mcp::McpStartupPolicy;
 use codex_mcp::PreparedMcpCall;
+use codex_mcp::effective_mcp_servers;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 
 pub(super) struct McpDesiredState {

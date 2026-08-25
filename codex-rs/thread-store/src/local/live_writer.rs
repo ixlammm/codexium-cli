@@ -20,8 +20,6 @@ use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 use crate::types::canonical_history_mode_from_rollout_items;
 
-const ROLLOUT_SIZE_BYTES_METRIC: &str = "codex.rollout.size_bytes";
-
 pub(super) async fn create_thread(
     store: &LocalThreadStore,
     params: CreateThreadParams,
@@ -174,12 +172,6 @@ pub(super) async fn shutdown_thread(
         }
     }
     sync_materialized_rollout_path(store, thread_id, rollout_path.as_path()).await?;
-    if let Some(metrics) = codex_otel::global()
-        && let Ok(metadata) = tokio::fs::metadata(rollout_path).await
-    {
-        let size_bytes = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
-        let _ = metrics.histogram(ROLLOUT_SIZE_BYTES_METRIC, size_bytes, &[]);
-    }
     store.live_recorders.lock().await.remove(&thread_id);
     Ok(())
 }

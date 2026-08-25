@@ -4,7 +4,6 @@ use crate::realtime_conversation::handle_speech as handle_realtime_conversation_
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use async_channel::Receiver;
-use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::protocol::Submission;
 use tracing::Instrument;
 use tracing::debug_span;
@@ -45,7 +44,6 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_thread_store::PersistContext;
 
-use crate::context_manager::is_user_turn_boundary;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
 use codex_rmcp_client::ElicitationAction;
@@ -424,16 +422,6 @@ async fn emit_thread_stop_lifecycle(sess: &Session) {
 pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
     shutdown_session_runtime(sess).await;
     info!("Shutting down Codex instance");
-    let history = sess.clone_history().await;
-    let turn_count = history
-        .raw_items()
-        .filter(|item| is_user_turn_boundary(item))
-        .count();
-    sess.services.session_telemetry.counter(
-        "codex.conversation.turn.count",
-        i64::try_from(turn_count).unwrap_or(0),
-        &[],
-    );
 
     emit_thread_stop_lifecycle(sess.as_ref()).await;
 
@@ -740,13 +728,5 @@ pub(super) fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
             codex.op = op_name
         ),
     };
-    if let Some(trace) = sub.trace.as_ref()
-        && !set_parent_from_w3c_trace_context(&dispatch_span, trace)
-    {
-        warn!(
-            submission.id = sub.id.as_str(),
-            "ignoring invalid submission trace carrier"
-        );
-    }
     dispatch_span
 }

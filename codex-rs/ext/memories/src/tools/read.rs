@@ -3,7 +3,6 @@ use codex_extension_api::ToolCall;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolSpec;
-use codex_otel::MetricsClient;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
@@ -13,9 +12,6 @@ use crate::READ_TOOL_NAME;
 use crate::backend::MemoriesBackend;
 use crate::backend::ReadMemoryRequest;
 use crate::backend::ReadMemoryResponse;
-use crate::metrics::record_tool_call;
-use crate::metrics::scope_from_path;
-use crate::metrics::truncated_tag;
 
 use super::backend_error_to_function_call;
 use super::memory_function_tool;
@@ -35,7 +31,6 @@ struct ReadArgs {
 #[derive(Clone)]
 pub(super) struct ReadTool<B> {
     pub(super) backend: B,
-    pub(super) metrics_client: Option<MetricsClient>,
 }
 
 impl<B> ToolExecutor<ToolCall> for ReadTool<B>
@@ -70,7 +65,6 @@ where
         let backend = self.backend.clone();
         let args: ReadArgs = parse_args(&call)?;
         let path = args.path;
-        let scope = scope_from_path(path.as_str());
         let response = backend
             .read(ReadMemoryRequest {
                 path: path.clone(),
@@ -79,13 +73,6 @@ where
                 max_tokens: DEFAULT_READ_MAX_TOKENS,
             })
             .await;
-        record_tool_call(
-            self.metrics_client.as_ref(),
-            READ_TOOL_NAME,
-            scope,
-            response.is_ok(),
-            truncated_tag(response.as_ref().ok().map(|response| response.truncated)),
-        );
         let response = response.map_err(backend_error_to_function_call)?;
         Ok(Box::new(JsonToolOutput::new(json!(response))))
     }

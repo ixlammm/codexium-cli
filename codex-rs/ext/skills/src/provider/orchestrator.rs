@@ -25,10 +25,6 @@ use crate::provider::SkillSearchRequest;
 
 const ORCHESTRATOR_SKILL_MIME_TYPE: &str = "mcp/skill";
 const ORCHESTRATOR_SKILL_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
-const ORCHESTRATOR_SKILL_DISCOVERY_DURATION_METRIC: &str =
-    "codex.skills.orchestrator.discovery.duration_ms";
-const ORCHESTRATOR_SKILL_DISCOVERY_RESOURCES_METRIC: &str =
-    "codex.skills.orchestrator.discovery.resources_total";
 const ORCHESTRATOR_SKILL_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESOURCE_PAGES: usize = 10;
 const MAX_ORCHESTRATOR_SKILLS: usize = 100;
@@ -60,9 +56,6 @@ impl SkillProvider for OrchestratorSkillProvider {
                 return Ok(SkillCatalog::default());
             }
 
-            let _discovery_timer =
-                codex_otel::start_global_timer(ORCHESTRATOR_SKILL_DISCOVERY_DURATION_METRIC, &[])
-                    .ok();
             let discovery_deadline =
                 tokio::time::Instant::now() + ORCHESTRATOR_SKILL_DISCOVERY_TIMEOUT;
             let mut catalog = SkillCatalog::default();
@@ -73,7 +66,6 @@ impl SkillProvider for OrchestratorSkillProvider {
             let mut skipped_resources = 0usize;
             let mut truncated = false;
             let mut completed_pages = 0usize;
-            let mut total_resources = 0usize;
 
             for _ in 0..MAX_RESOURCE_PAGES {
                 let page = match tokio::time::timeout_at(
@@ -109,7 +101,6 @@ impl SkillProvider for OrchestratorSkillProvider {
                     }
                 };
                 completed_pages = completed_pages.saturating_add(1);
-                total_resources = total_resources.saturating_add(result.resources.len());
 
                 for resource in &result.resources {
                     if resource.mime_type.as_deref() != Some(ORCHESTRATOR_SKILL_MIME_TYPE) {
@@ -160,14 +151,6 @@ impl SkillProvider for OrchestratorSkillProvider {
                 catalog.warnings.push(format!(
                     "Skipped {skipped_resources} malformed orchestrator skill resources."
                 ));
-            }
-
-            if let Some(metrics) = codex_otel::global() {
-                let _ = metrics.histogram(
-                    ORCHESTRATOR_SKILL_DISCOVERY_RESOURCES_METRIC,
-                    i64::try_from(total_resources).unwrap_or(i64::MAX),
-                    &[],
-                );
             }
 
             Ok(catalog)

@@ -127,7 +127,11 @@ async fn registry_requests_do_not_log_sensitive_urls_or_response_headers() -> Re
             .replacen("http://", "http://registry-user:registry-password@", 1);
     let registry_url =
         format!("{registry_url}/registry-path-secret?registry_token=registry-query-secret");
-    let client = EnvironmentRegistryClient::new(registry_url, static_registry_auth_provider())?;
+    let client = EnvironmentRegistryClient::new(
+        registry_url,
+        static_registry_auth_provider(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    )?;
     client
         .register_environment("environment-requested", &executor_public_key)
         .await?;
@@ -287,8 +291,12 @@ async fn validate_harness_key_requires_explicit_valid_response() {
         })))
         .mount(&server)
         .await;
-    let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
-        .expect("client");
+    let client = EnvironmentRegistryClient::new(
+        server.uri(),
+        static_registry_auth_provider(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    )
+    .expect("client");
 
     let error = RegistryHarnessKeyValidator {
         client,
@@ -317,8 +325,12 @@ async fn validate_harness_key_does_not_expose_error_body() {
         .respond_with(ResponseTemplate::new(500).set_body_string(HARNESS_KEY_AUTHORIZATION))
         .mount(&server)
         .await;
-    let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
-        .expect("client");
+    let client = EnvironmentRegistryClient::new(
+        server.uri(),
+        static_registry_auth_provider(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    )
+    .expect("client");
 
     let error = RegistryHarnessKeyValidator {
         client,

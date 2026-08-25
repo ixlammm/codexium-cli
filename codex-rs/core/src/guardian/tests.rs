@@ -17,7 +17,6 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::test_support;
-use codex_analytics::GuardianApprovalRequestSource;
 use codex_config::ConfigLayerStack;
 use codex_config::FeatureRequirementsToml;
 use codex_config::NetworkConstraints;
@@ -34,7 +33,6 @@ use codex_model_provider::create_model_provider;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::ThreadId;
@@ -1301,7 +1299,6 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
         /*retry_reason*/ None,
         GuardianReviewOptions {
             plugin_attribution_override: None,
-            approval_request_source: GuardianApprovalRequestSource::MainTurn,
             external_cancel: Some(cancel_token),
         },
     )
@@ -1565,12 +1562,7 @@ enum GuardianTestCatalog {
 async fn guardian_request_model_for_auto_review(
     auto_review_model_override: Option<String>,
     catalog: GuardianTestCatalog,
-) -> anyhow::Result<(
-    String,
-    String,
-    String,
-    codex_analytics::GuardianReviewAnalyticsResult,
-)> {
+) -> anyhow::Result<(String, String, String)> {
     let server = start_mock_server().await;
     let guardian_assessment = serde_json::json!({
         "outcome": "allow",
@@ -1613,7 +1605,7 @@ async fn guardian_request_model_for_auto_review(
     let parent_turn_id = turn.sub_id.clone();
     seed_guardian_parent_history(&session, &turn).await;
 
-    let (outcome, analytics_result) = run_guardian_review_session_for_test(
+    let outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         turn,
         GuardianApprovalRequest::Shell {
@@ -1646,12 +1638,7 @@ async fn guardian_request_model_for_auto_review(
         .expect("guardian request should include a model")
         .to_string();
 
-    Ok((
-        request_model,
-        parent_model,
-        preferred_model,
-        analytics_result,
-    ))
+    Ok((request_model, parent_model, preferred_model))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1660,36 +1647,15 @@ async fn guardian_review_uses_model_catalog_override_when_preferred_review_model
     skip_if_no_network!(Ok(()));
 
     let override_model = "guardian-review-model-override".to_string();
-    let (request_model, parent_model, preferred_model, analytics_result) =
-        guardian_request_model_for_auto_review(
-            Some(override_model.clone()),
-            GuardianTestCatalog::Bundled,
-        )
-        .await?;
+    let (request_model, parent_model, preferred_model) = guardian_request_model_for_auto_review(
+        Some(override_model.clone()),
+        GuardianTestCatalog::Bundled,
+    )
+    .await?;
 
     assert_eq!(request_model, override_model);
     assert_ne!(request_model, parent_model);
     assert_ne!(request_model, preferred_model);
-    assert_eq!(
-        analytics_result.guardian_catalog_contains_auto_review,
-        Some(true)
-    );
-    assert_eq!(
-        analytics_result.guardian_default_review_model_id.as_deref(),
-        Some(preferred_model.as_str())
-    );
-    assert_eq!(
-        analytics_result.guardian_review_model_overridden,
-        Some(true)
-    );
-    assert_eq!(
-        analytics_result.guardian_review_model_override.as_deref(),
-        Some(override_model.as_str())
-    );
-    assert_eq!(
-        analytics_result.guardian_model_provider_id.as_deref(),
-        Some(OPENAI_PROVIDER_ID)
-    );
 
     Ok(())
 }
@@ -1699,73 +1665,31 @@ async fn guardian_review_uses_preferred_review_model_without_model_catalog_overr
 -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (request_model, parent_model, preferred_model, analytics_result) =
-        guardian_request_model_for_auto_review(
-            /*auto_review_model_override*/ None,
-            GuardianTestCatalog::Bundled,
-        )
-        .await?;
+    let (request_model, parent_model, preferred_model) = guardian_request_model_for_auto_review(
+        /*auto_review_model_override*/ None,
+        GuardianTestCatalog::Bundled,
+    )
+    .await?;
 
     assert_eq!(request_model, preferred_model);
     assert_ne!(request_model, parent_model);
-    assert_eq!(
-        analytics_result.guardian_catalog_contains_auto_review,
-        Some(true)
-    );
-    assert_eq!(
-        analytics_result.guardian_default_review_model_id.as_deref(),
-        Some(preferred_model.as_str())
-    );
-    assert_eq!(
-        analytics_result.guardian_review_model_overridden,
-        Some(false)
-    );
-    assert_eq!(
-        analytics_result.guardian_review_model_override.as_deref(),
-        None
-    );
-    assert_eq!(
-        analytics_result.guardian_model_provider_id.as_deref(),
-        Some(OPENAI_PROVIDER_ID)
-    );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_review_records_missing_auto_review_model_in_analytics_metadata()
+async fn guardian_review_falls_back_to_parent_model_when_review_model_missing_from_catalog()
 -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (request_model, parent_model, preferred_model, analytics_result) =
-        guardian_request_model_for_auto_review(
-            /*auto_review_model_override*/ None,
-            GuardianTestCatalog::ParentOnly,
-        )
-        .await?;
+    let (request_model, parent_model, preferred_model) = guardian_request_model_for_auto_review(
+        /*auto_review_model_override*/ None,
+        GuardianTestCatalog::ParentOnly,
+    )
+    .await?;
 
     assert_eq!(request_model, parent_model);
     assert_ne!(request_model, preferred_model);
-    assert_eq!(
-        analytics_result.guardian_catalog_contains_auto_review,
-        Some(false)
-    );
-    assert_eq!(
-        analytics_result.guardian_default_review_model_id.as_deref(),
-        Some(preferred_model.as_str())
-    );
-    assert_eq!(
-        analytics_result.guardian_review_model_overridden,
-        Some(false)
-    );
-    assert_eq!(
-        analytics_result.guardian_review_model_override.as_deref(),
-        None
-    );
-    assert_eq!(
-        analytics_result.guardian_model_provider_id.as_deref(),
-        Some(OPENAI_PROVIDER_ID)
-    );
 
     Ok(())
 }
@@ -1880,20 +1804,10 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         /*max_attempts*/ 1,
     )
     .await;
-    let (GuardianReviewOutcome::Completed(assessment), metadata) = outcome else {
+    let GuardianReviewOutcome::Completed(assessment) = outcome else {
         panic!("expected guardian assessment");
     };
-    let guardian_thread_id = metadata
-        .guardian_thread_id
-        .as_deref()
-        .expect("guardian thread id");
     assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
-    assert_ne!(guardian_thread_id, session.thread_id.to_string());
-    ThreadId::from_string(guardian_thread_id).expect("guardian thread id should be a valid UUID");
-    assert!(matches!(
-        metadata.guardian_session_kind,
-        Some(codex_analytics::GuardianReviewSessionKind::TrunkNew)
-    ));
     let request = request_log.single_request();
     let request_body = request.body_json();
     let guardian_tool_names = request_body["tools"]
@@ -1947,24 +1861,6 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
             },
             "required": ["outcome"]
         }))
-    );
-    let request_model = request_body
-        .get("model")
-        .and_then(|value| value.as_str())
-        .expect("guardian request should include a model");
-    let request_reasoning_effort = request_body
-        .get("reasoning")
-        .and_then(|reasoning| reasoning.get("effort"))
-        .and_then(|value| value.as_str());
-    assert_eq!(metadata.guardian_model.as_deref(), Some(request_model));
-    assert_eq!(
-        metadata.guardian_reasoning_effort.as_deref(),
-        request_reasoning_effort
-    );
-    assert_eq!(metadata.had_prior_review_context, Some(false));
-    assert!(
-        metadata.time_to_first_token_ms.is_some(),
-        "guardian review metadata should capture TTFT when the nested turn completes"
     );
 
     let mut settings = Settings::clone_current();
@@ -2245,77 +2141,22 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     )
     .await;
 
-    let (GuardianReviewOutcome::Completed(first_assessment), first_metadata) = first_outcome else {
+    let GuardianReviewOutcome::Completed(first_assessment) = first_outcome else {
         panic!("expected first guardian assessment");
     };
-    let (GuardianReviewOutcome::Completed(second_assessment), second_metadata) = second_outcome
-    else {
+    let GuardianReviewOutcome::Completed(second_assessment) = second_outcome else {
         panic!("expected second guardian assessment");
     };
-    let (GuardianReviewOutcome::Completed(third_assessment), third_metadata) = third_outcome else {
+    let GuardianReviewOutcome::Completed(third_assessment) = third_outcome else {
         panic!("expected third guardian assessment");
     };
-    let (GuardianReviewOutcome::Completed(fourth_assessment), fourth_metadata) = fourth_outcome
-    else {
+    let GuardianReviewOutcome::Completed(fourth_assessment) = fourth_outcome else {
         panic!("expected fourth guardian assessment");
     };
     assert_eq!(first_assessment.outcome, GuardianAssessmentOutcome::Allow);
     assert_eq!(second_assessment.outcome, GuardianAssessmentOutcome::Allow);
     assert_eq!(third_assessment.outcome, GuardianAssessmentOutcome::Allow);
     assert_eq!(fourth_assessment.outcome, GuardianAssessmentOutcome::Allow);
-    assert!(matches!(
-        first_metadata.guardian_session_kind,
-        Some(codex_analytics::GuardianReviewSessionKind::TrunkNew)
-    ));
-    assert!(matches!(
-        second_metadata.guardian_session_kind,
-        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
-    ));
-    assert!(matches!(
-        third_metadata.guardian_session_kind,
-        Some(codex_analytics::GuardianReviewSessionKind::TrunkNew)
-    ));
-    assert!(matches!(
-        fourth_metadata.guardian_session_kind,
-        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
-    ));
-    ThreadId::from_string(
-        first_metadata
-            .guardian_thread_id
-            .as_deref()
-            .expect("first guardian thread id"),
-    )
-    .expect("first guardian thread id should be a valid UUID");
-    ThreadId::from_string(
-        second_metadata
-            .guardian_thread_id
-            .as_deref()
-            .expect("second guardian thread id"),
-    )
-    .expect("second guardian thread id should be a valid UUID");
-    ThreadId::from_string(
-        third_metadata
-            .guardian_thread_id
-            .as_deref()
-            .expect("third guardian thread id"),
-    )
-    .expect("third guardian thread id should be a valid UUID");
-    assert_eq!(first_metadata.had_prior_review_context, Some(false));
-    assert_eq!(second_metadata.had_prior_review_context, Some(true));
-    assert_eq!(third_metadata.had_prior_review_context, Some(false));
-    assert_eq!(fourth_metadata.had_prior_review_context, Some(true));
-    assert_eq!(
-        first_metadata.guardian_thread_id,
-        second_metadata.guardian_thread_id
-    );
-    assert_ne!(
-        second_metadata.guardian_thread_id,
-        third_metadata.guardian_thread_id
-    );
-    assert_eq!(
-        third_metadata.guardian_thread_id,
-        fourth_metadata.guardian_thread_id
-    );
 
     let requests = request_log.requests();
     assert_eq!(requests.len(), 4);
@@ -2460,14 +2301,10 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
         /*max_attempts*/ 1,
     )
     .await;
-    let (GuardianReviewOutcome::Completed(first_assessment), first_metadata) = first_outcome else {
+    let GuardianReviewOutcome::Completed(first_assessment) = first_outcome else {
         panic!("expected first guardian assessment");
     };
     assert_eq!(first_assessment.rationale, "first guardian rationale");
-    assert!(matches!(
-        first_metadata.guardian_session_kind,
-        Some(codex_analytics::GuardianReviewSessionKind::TrunkNew)
-    ));
 
     session
         .guardian_review_session
@@ -2505,16 +2342,11 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
         /*max_attempts*/ 1,
     )
     .await;
-    let (GuardianReviewOutcome::Completed(second_assessment), second_metadata) = second_outcome
-    else {
+    let GuardianReviewOutcome::Completed(second_assessment) = second_outcome else {
         panic!("expected second guardian assessment");
     };
     assert_eq!(second_assessment.outcome, GuardianAssessmentOutcome::Allow);
     assert_eq!(second_assessment.rationale, "second guardian rationale");
-    assert!(matches!(
-        second_metadata.guardian_session_kind,
-        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
-    ));
 
     assert_eq!(
         request_log.requests().len(),
@@ -2661,7 +2493,7 @@ async fn guardian_review_retries_transient_session_failure_then_approves() -> an
     let (session, turn) = guardian_test_session_and_turn(&server).await;
     seed_guardian_parent_history(&session, &turn).await;
 
-    let (outcome, metadata) = run_guardian_review_session_for_test(
+    let outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
         guardian_shell_request("shell-session-retry"),
@@ -2677,11 +2509,6 @@ async fn guardian_review_retries_transient_session_failure_then_approves() -> an
     };
     assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
     assert_eq!(assessment.rationale, "retry succeeded");
-    assert_eq!(metadata.attempt_count, 2);
-    assert!(matches!(
-        metadata.guardian_session_kind,
-        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
-    ));
     assert_eq!(request_log.requests().len(), 2);
     Ok(())
 }
@@ -2752,7 +2579,7 @@ async fn guardian_review_retries_two_parse_failures_then_approves() -> anyhow::R
     let (session, turn) = guardian_test_session_and_turn(&server).await;
     seed_guardian_parent_history(&session, &turn).await;
 
-    let (outcome, metadata) = run_guardian_review_session_for_test(
+    let outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
         guardian_shell_request("shell-parse-retry"),
@@ -2768,11 +2595,6 @@ async fn guardian_review_retries_two_parse_failures_then_approves() -> anyhow::R
     };
     assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
     assert_eq!(assessment.rationale, "retry succeeded");
-    assert_eq!(metadata.attempt_count, 3);
-    assert!(matches!(
-        metadata.guardian_session_kind,
-        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
-    ));
     assert_eq!(request_log.requests().len(), 3);
     Ok(())
 }

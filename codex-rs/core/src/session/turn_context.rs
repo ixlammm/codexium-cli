@@ -4,7 +4,6 @@ use crate::exec_policy::AllowPrefixRules;
 use crate::shell_snapshot::ShellSnapshotFile;
 use crate::tools::sandboxing::executor_windows_sandbox_level;
 use codex_core_plugins::PluginCommandAttribution;
-use codex_core_plugins::ResolvedPluginMetricsOperation;
 use codex_core_plugins::TrustedPluginRoots;
 use codex_exec_server::ExecutorFileSystem;
 use codex_file_system::FileSystemSandboxContext;
@@ -140,7 +139,6 @@ pub struct TurnContext {
     pub config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
-    pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
@@ -243,26 +241,6 @@ impl TurnContext {
         }
     }
 
-    pub(crate) async fn plugin_metrics_operation_for_command(
-        &self,
-        command: &[String],
-        cwd: &PathUri,
-        environment: &Environment,
-    ) -> Option<ResolvedPluginMetricsOperation> {
-        let trusted_roots = self.extension_data.get::<TrustedPluginRoots>()?;
-        if environment.is_remote() {
-            trusted_roots
-                .resolve_metrics_operation_in_filesystem(
-                    command,
-                    cwd,
-                    environment.get_filesystem().as_ref(),
-                )
-                .await
-        } else {
-            trusted_roots.resolve_metrics_operation(command, &cwd.to_abs_path().ok()?)
-        }
-    }
-
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
         self.config.permissions.effective_permission_profile()
     }
@@ -271,6 +249,7 @@ impl TurnContext {
         self.config.permissions.file_system_sandbox_policy()
     }
 
+    #[cfg(test)]
     pub(crate) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
         self.config.permissions.network_sandbox_policy()
     }
@@ -360,10 +339,6 @@ impl TurnContext {
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
             model_info: model_info.clone(),
-            session_telemetry: self
-                .session_telemetry
-                .clone()
-                .with_model(model.as_str(), model_info.slug.as_str()),
             provider: self.provider.clone(),
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
@@ -565,7 +540,6 @@ impl Session {
         thread_id: ThreadId,
         session_id: SessionId,
         auth_manager: Option<Arc<AuthManager>>,
-        session_telemetry: &SessionTelemetry,
         provider: SharedModelProvider,
         session_configuration: &SessionConfiguration,
         multi_agent_version: MultiAgentVersion,
@@ -586,12 +560,7 @@ impl Session {
         let reasoning_summary = session_configuration
             .model_reasoning_summary
             .unwrap_or(model_info.default_reasoning_summary);
-        let session_telemetry = session_telemetry.clone().with_model(
-            session_configuration.collaboration_mode.model(),
-            model_info.slug.as_str(),
-        );
         let session_source = session_configuration.session_source.clone();
-        let session_telemetry_for_context = session_telemetry;
         let available_models = models_manager.try_list_models().unwrap_or_default();
         let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
             codex_tools::unified_exec_feature_mode_for_features(per_turn_config.features.get()),
@@ -635,13 +604,12 @@ impl Session {
         extension_data.insert(skills_snapshot);
         TurnContext {
             sub_id,
-            trace_id: current_span_trace_id(),
+            trace_id: None,
             realtime_active: false,
             code_mode_available: true,
             config: per_turn_config,
             auth_manager,
             model_info,
-            session_telemetry: session_telemetry_for_context,
             provider,
             reasoning_effort,
             reasoning_summary,
@@ -864,7 +832,6 @@ impl Session {
             self.thread_id(),
             self.session_id(),
             Some(Arc::clone(&self.services.auth_manager)),
-            &self.services.session_telemetry,
             session_configuration.provider.clone(),
             &session_configuration,
             multi_agent_version,

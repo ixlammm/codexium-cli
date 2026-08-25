@@ -104,11 +104,6 @@ pub(crate) async fn execute_user_shell_command(
     cancellation_token: CancellationToken,
     mode: UserShellCommandMode,
 ) {
-    session
-        .services
-        .session_telemetry
-        .counter("codex.task.user_shell", /*inc*/ 1, &[]);
-
     if mode == UserShellCommandMode::StandaloneTurn {
         // Auxiliary mode runs within an existing active turn. That turn already
         // emitted TurnStarted, so emitting another TurnStarted here would create

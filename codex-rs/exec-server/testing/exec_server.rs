@@ -32,6 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "ws://127.0.0.1:0",
         runtime_paths,
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        codex_exec_server::RequestDispatchMode::Inline,
     )
     .await
 }

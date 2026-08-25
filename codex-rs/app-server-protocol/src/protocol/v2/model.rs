@@ -118,6 +118,15 @@ pub struct Model {
     pub default_service_tier: Option<String>,
     // Only one model should be marked as default.
     pub is_default: bool,
+    /// Codexium Patch: whether this is a user-defined custom model.
+    #[serde(default)]
+    pub is_custom: bool,
+    /// Codexium Patch: provider id (config key) that owns this model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Codexium Patch: display label for the owning provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_label: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

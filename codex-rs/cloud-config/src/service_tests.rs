@@ -1,11 +1,10 @@
-use super::*;
+﻿use super::*;
 use crate::backend::BundleClient;
 use crate::backend::BundleRequestError;
 use crate::backend::RetryableFailureKind;
 use crate::backend::bundle_from_response;
 use crate::cache::CLOUD_CONFIG_BUNDLE_CACHE_FILENAME;
 use crate::cache::CloudConfigBundleCache;
-use crate::metrics::bundle_shape_tag;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_backend_client::ConfigBundleResponse;
@@ -362,44 +361,6 @@ impl BundleClient for UnauthorizedBundleClient {
             message: self.message.clone(),
         })
     }
-}
-
-#[test]
-fn bundle_shape_tag_describes_sorted_enterprise_sources() {
-    assert_eq!(bundle_shape_tag(/*bundle*/ None), "none");
-    assert_eq!(
-        bundle_shape_tag(Some(&CloudConfigBundle::default())),
-        "empty"
-    );
-    assert_eq!(
-        bundle_shape_tag(Some(&CloudConfigBundle {
-            config_toml: CloudConfigTomlBundle {
-                enterprise_managed: vec![test_config_fragment()],
-            },
-            requirements_toml: CloudRequirementsTomlBundle::default(),
-        })),
-        "enterprise_config"
-    );
-    assert_eq!(
-        bundle_shape_tag(Some(&CloudConfigBundle {
-            config_toml: CloudConfigTomlBundle::default(),
-            requirements_toml: CloudRequirementsTomlBundle {
-                enterprise_managed: vec![test_requirements_fragment()],
-            },
-        })),
-        "enterprise_requirements"
-    );
-    assert_eq!(
-        bundle_shape_tag(Some(&CloudConfigBundle {
-            config_toml: CloudConfigTomlBundle {
-                enterprise_managed: vec![test_config_fragment()],
-            },
-            requirements_toml: CloudRequirementsTomlBundle {
-                enterprise_managed: vec![test_requirements_fragment()],
-            },
-        })),
-        "enterprise_config,enterprise_requirements"
-    );
 }
 
 #[tokio::test]

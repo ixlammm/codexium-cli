@@ -13,7 +13,6 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use std::time::Instant;
 use std::time::SystemTime;
 
 use arc_swap::ArcSwapOption;
@@ -28,8 +27,6 @@ use self::persistence::load_cached_connector_runtime_for_identity;
 use self::persistence::persist_codex_apps_cache;
 use self::persistence::server_info_cache_path;
 use self::persistence::tools_cache_path;
-
-const MCP_TOOLS_CACHE_PUBLISH_DURATION_METRIC: &str = "codex.mcp.tools.cache_publish.duration_ms";
 
 /// Values stored in the connector runtime's persisted tool snapshot.
 ///
@@ -192,14 +189,13 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeContext<T> {
         self.current_snapshot().is_some()
     }
 
-    pub fn begin_fetch(&self, source: ConnectorRuntimeFetchSource) -> ConnectorRuntimeFetchTicket {
+    pub fn begin_fetch(&self) -> ConnectorRuntimeFetchTicket {
         ConnectorRuntimeFetchTicket {
             generation: self
                 .entry
                 .next_fetch_generation
                 .fetch_add(1, Ordering::Relaxed)
                 + 1,
-            source,
         }
     }
 
@@ -252,17 +248,11 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeContext<T> {
         tools: Vec<T>,
         persist: impl FnOnce(&ConnectorRuntimeContext<T>, &McpServerInfo, &ConnectorRuntimeSnapshot<T>),
     ) -> Arc<ConnectorRuntimeSnapshot<T>> {
-        let publish_start = Instant::now();
         let mut last_accepted_generation = lock_unpoisoned(&self.entry.last_accepted_generation);
         if ticket.generation <= *last_accepted_generation
             && let Some(snapshot) = self.current_snapshot()
         {
             drop(last_accepted_generation);
-            emit_duration(
-                MCP_TOOLS_CACHE_PUBLISH_DURATION_METRIC,
-                publish_start.elapsed(),
-                &[("source", ticket.source.as_str()), ("result", "stale")],
-            );
             return snapshot;
         }
 
@@ -279,11 +269,6 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeContext<T> {
         // out of order.
         persist(self, server_info, snapshot.as_ref());
         drop(last_accepted_generation);
-        emit_duration(
-            MCP_TOOLS_CACHE_PUBLISH_DURATION_METRIC,
-            publish_start.elapsed(),
-            &[("source", ticket.source.as_str()), ("result", "published")],
-        );
         snapshot
     }
 
@@ -299,24 +284,8 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeContext<T> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum ConnectorRuntimeFetchSource {
-    Startup,
-    HardRefresh,
-}
-
-impl ConnectorRuntimeFetchSource {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Startup => "startup",
-            Self::HardRefresh => "hard_refresh",
-        }
-    }
-}
-
 pub struct ConnectorRuntimeFetchTicket {
     generation: u64,
-    source: ConnectorRuntimeFetchSource,
 }
 
 /// All live state owned by one connector identity.
@@ -360,12 +329,6 @@ enum ConnectorRuntimeDiskCache {
 struct ConnectorRuntimeIdentity {
     codex_home: PathBuf,
     key: ConnectorRuntimeContextKey,
-}
-
-fn emit_duration(metric: &str, duration: Duration, tags: &[(&str, &str)]) {
-    if let Some(metrics) = codex_otel::global() {
-        let _ = metrics.record_duration(metric, duration, tags);
-    }
 }
 
 fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

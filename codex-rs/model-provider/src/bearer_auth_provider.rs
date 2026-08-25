@@ -52,23 +52,6 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn bearer_auth_provider_reports_when_auth_header_will_attach() {
-        let auth = BearerAuthProvider {
-            token: Some("access-token".to_string()),
-            account_id: None,
-            is_fedramp_account: false,
-        };
-
-        assert_eq!(
-            codex_api::auth_header_telemetry(&auth),
-            codex_api::AuthHeaderTelemetry {
-                attached: true,
-                name: Some("authorization"),
-            }
-        );
-    }
-
-    #[test]
     fn bearer_auth_provider_adds_auth_headers() {
         let auth = BearerAuthProvider::for_test(Some("access-token"), Some("workspace-123"));
         let mut headers = HeaderMap::new();

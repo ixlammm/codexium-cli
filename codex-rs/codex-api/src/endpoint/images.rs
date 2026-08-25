@@ -6,12 +6,10 @@ use crate::images::ImageGenerationRequest;
 use crate::images::ImageResponse;
 use crate::provider::Provider;
 use codex_client::HttpTransport;
-use codex_client::RequestTelemetry;
 use http::HeaderMap;
 use http::Method;
 use serde::Serialize;
 use serde_json::to_value;
-use std::sync::Arc;
 
 pub struct ImagesClient<T: HttpTransport> {
     session: EndpointSession<T>,
@@ -21,12 +19,6 @@ impl<T: HttpTransport> ImagesClient<T> {
     pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
-        }
-    }
-
-    pub fn with_telemetry(self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
-        Self {
-            session: self.session.with_request_telemetry(request),
         }
     }
 
@@ -88,6 +80,7 @@ mod tests {
     use http::StatusCode;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::sync::Arc;
     use std::sync::Mutex;
     use std::time::Duration;
 

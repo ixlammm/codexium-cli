@@ -1,7 +1,7 @@
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::InterAgentCommunication;
 
-const AGENT_COMMUNICATION_TARGET: &str = "codex_otel.agent_communication";
+const AGENT_COMMUNICATION_TARGET: &str = "codex.agent_communication";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AgentCommunicationKind {

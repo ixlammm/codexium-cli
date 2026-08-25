@@ -203,7 +203,7 @@ pub async fn upload_openai_file(
                 "other"
             };
             tracing::event!(
-                target: "codex_otel.log_only",
+                target: "codex.log_only",
                 tracing::Level::WARN,
                 event.name = "codex.openai_file_blob_upload_failed",
                 file_id = %create_payload.file_id,
@@ -228,7 +228,7 @@ pub async fn upload_openai_file(
     let azure_error_code = upload_response_header(&upload_response, "x-ms-error-code");
     if !upload_status.is_success() {
         tracing::event!(
-            target: "codex_otel.log_only",
+            target: "codex.log_only",
             tracing::Level::WARN,
             event.name = "codex.openai_file_blob_upload_failed",
             file_id = %create_payload.file_id,

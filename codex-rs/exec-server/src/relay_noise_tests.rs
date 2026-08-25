@@ -45,7 +45,7 @@ async fn missing_pong_disconnects_physical_relay() -> Result<()> {
 
     let environment_task = tokio::spawn(run_multiplexed_environment(
         environment_websocket,
-        ConnectionProcessor::new(ExecServerRuntimePaths::new(
+        ConnectionProcessor::new_for_tests(ExecServerRuntimePaths::new(
             std::env::current_exe()?,
             /*codex_linux_sandbox_exe*/ None,
         )?),
@@ -76,7 +76,7 @@ async fn pong_keeps_physical_relay_connected() -> Result<()> {
 
     let environment_task = tokio::spawn(run_multiplexed_environment(
         environment_websocket,
-        ConnectionProcessor::new(ExecServerRuntimePaths::new(
+        ConnectionProcessor::new_for_tests(ExecServerRuntimePaths::new(
             std::env::current_exe()?,
             /*codex_linux_sandbox_exe*/ None,
         )?),
@@ -150,7 +150,7 @@ async fn pending_harness_key_validation_does_not_block_new_handshakes() -> Resul
     let calls = Arc::new(AtomicUsize::new(0));
     let environment_task = tokio::spawn(run_multiplexed_environment(
         environment_websocket,
-        ConnectionProcessor::new(ExecServerRuntimePaths::new(
+        ConnectionProcessor::new_for_tests(ExecServerRuntimePaths::new(
             std::env::current_exe()?,
             /*codex_linux_sandbox_exe*/ None,
         )?),
@@ -204,7 +204,7 @@ async fn duplicate_handshakes_exhaust_failure_budget() -> Result<()> {
     let release = Arc::new(Notify::new());
     let environment_task = tokio::spawn(run_multiplexed_environment(
         environment_websocket,
-        ConnectionProcessor::new(ExecServerRuntimePaths::new(
+        ConnectionProcessor::new_for_tests(ExecServerRuntimePaths::new(
             std::env::current_exe()?,
             /*codex_linux_sandbox_exe*/ None,
         )?),
@@ -300,7 +300,7 @@ async fn oversized_harness_authorization_is_rejected_before_validation() -> Resu
     let calls = Arc::new(AtomicUsize::new(0));
     let environment_task = tokio::spawn(run_multiplexed_environment(
         environment_websocket,
-        ConnectionProcessor::new(ExecServerRuntimePaths::new(
+        ConnectionProcessor::new_for_tests(ExecServerRuntimePaths::new(
             std::env::current_exe()?,
             /*codex_linux_sandbox_exe*/ None,
         )?),
@@ -355,7 +355,7 @@ async fn repeated_malformed_handshakes_close_the_physical_relay() -> Result<()> 
     let harness_identity = NoiseChannelIdentity::generate()?;
     let environment_task = tokio::spawn(run_multiplexed_environment(
         environment_websocket,
-        ConnectionProcessor::new(ExecServerRuntimePaths::new(
+        ConnectionProcessor::new_for_tests(ExecServerRuntimePaths::new(
             std::env::current_exe()?,
             /*codex_linux_sandbox_exe*/ None,
         )?),
@@ -402,7 +402,7 @@ async fn repeated_early_data_during_validation_closes_the_physical_relay() -> Re
     let harness_identity = NoiseChannelIdentity::generate()?;
     let environment_task = tokio::spawn(run_multiplexed_environment(
         environment_websocket,
-        ConnectionProcessor::new(ExecServerRuntimePaths::new(
+        ConnectionProcessor::new_for_tests(ExecServerRuntimePaths::new(
             std::env::current_exe()?,
             /*codex_linux_sandbox_exe*/ None,
         )?),

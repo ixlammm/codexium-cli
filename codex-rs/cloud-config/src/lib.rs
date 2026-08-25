@@ -6,7 +6,6 @@
 mod backend;
 mod bundle_loader;
 mod cache;
-mod metrics;
 mod service;
 mod validation;
 

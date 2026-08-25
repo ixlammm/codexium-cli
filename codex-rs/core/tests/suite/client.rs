@@ -1,4 +1,4 @@
-use codex_config::types::AuthCredentialsStoreMode;
+﻿use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::ModelClient;
 use codex_core::NewThread;
 use codex_core::Prompt;
@@ -23,8 +23,6 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
-use codex_otel::SessionTelemetry;
-use codex_otel::TelemetryAuthMode;
 use codex_protocol::ResponseItemId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -1496,18 +1494,6 @@ async fn send_request_with_provider(provider: ModelProviderInfo) {
     let model_info =
         codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
     let thread_id = ThreadId::new();
-    let session_telemetry = SessionTelemetry::new(
-        thread_id,
-        model.as_str(),
-        model_info.slug.as_str(),
-        /*account_id*/ None,
-        Some("test@test.com".to_string()),
-        /*auth_mode*/ None,
-        "test_originator".to_string(),
-        /*log_user_prompts*/ false,
-        "test".to_string(),
-        SessionSource::Exec,
-    );
     let client = ModelClient::new(
         Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
             "unused-api-key",
@@ -1545,7 +1531,6 @@ async fn send_request_with_provider(provider: ModelProviderInfo) {
         .stream(
             &prompt,
             &model_info,
-            &session_telemetry,
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
             /*service_tier*/ None,
@@ -1756,7 +1741,6 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),
         Arc::new(codex_core::test_support::EmptyUserInstructionsProvider),
-        /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*agent_graph_store*/ None,
         installation_id,
@@ -2939,20 +2923,6 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
     let model_info =
         codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
     let thread_id = ThreadId::new();
-    let auth_manager =
-        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
-    let session_telemetry = SessionTelemetry::new(
-        thread_id,
-        model.as_str(),
-        model_info.slug.as_str(),
-        /*account_id*/ None,
-        Some("test@test.com".to_string()),
-        auth_manager.auth_mode().map(TelemetryAuthMode::from),
-        "test_originator".to_string(),
-        /*log_user_prompts*/ false,
-        "test".to_string(),
-        SessionSource::Exec,
-    );
 
     let client = ModelClient::new(
         /*auth_manager*/ None,
@@ -3069,7 +3039,6 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
         .stream(
             &prompt,
             &model_info,
-            &session_telemetry,
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
             /*service_tier*/ None,
@@ -3192,7 +3161,7 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "reasoning_output_tokens": 0,
                     "total_tokens": 123
                 },
-                // Default model is gpt-5.4 in tests → 95% usable context window
+                // Default model is gpt-5.4 in tests â†’ 95% usable context window
                 "model_context_window": 258400
             },
             "rate_limits": {
@@ -3502,7 +3471,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
     // Mock server
     let server = MockServer::start().await;
 
-    // First request – must NOT include `previous_response_id`.
+    // First request â€“ must NOT include `previous_response_id`.
     let first = ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
         .set_body_raw(
@@ -3586,7 +3555,7 @@ async fn env_var_overrides_loaded_auth() {
     // Mock server
     let server = MockServer::start().await;
 
-    // First request – must NOT include `previous_response_id`.
+    // First request â€“ must NOT include `previous_response_id`.
     let first = ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
         .set_body_raw(

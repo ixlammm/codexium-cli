@@ -70,7 +70,6 @@ impl GuardianTranscriptEntryKind {
 pub(crate) struct GuardianPromptItems {
     pub(crate) items: Vec<UserInput>,
     pub(crate) transcript_cursor: GuardianTranscriptCursor,
-    pub(crate) reviewed_action_truncated: bool,
 }
 
 /// Points to the end of the transcript that the guardian has already reviewed.
@@ -250,7 +249,6 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
     Ok(GuardianPromptItems {
         items,
         transcript_cursor,
-        reviewed_action_truncated: planned_action_json.truncated,
     })
 }
 

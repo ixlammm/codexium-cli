@@ -38,7 +38,7 @@ async fn processor_exit_reports_closed_virtual_stream() -> Result<()> {
     let mut stream = spawn_noise_virtual_stream(
         "stream-1".to_string(),
         /*instance_id*/ 7,
-        ConnectionProcessor::new(ExecServerRuntimePaths::new(
+        ConnectionProcessor::new_for_tests(ExecServerRuntimePaths::new(
             std::env::current_exe()?,
             /*codex_linux_sandbox_exe*/ None,
         )?),

@@ -13,9 +13,6 @@ use crate::transport::AppServerTransport;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCRequest;
-use codex_otel::set_parent_from_context;
-use codex_otel::set_parent_from_w3c_trace_context;
-use codex_otel::traceparent_context_from_env;
 use codex_protocol::protocol::W3cTraceContext;
 use tracing::Span;
 use tracing::field;
@@ -123,22 +120,11 @@ fn record_client_info(span: &Span, client_name: Option<&str>, client_version: Op
 }
 
 fn attach_parent_context(
-    span: &Span,
-    method: &str,
-    request_id: &impl std::fmt::Display,
-    parent_trace: Option<&W3cTraceContext>,
+    _span: &Span,
+    _method: &str,
+    _request_id: &impl std::fmt::Display,
+    _parent_trace: Option<&W3cTraceContext>,
 ) {
-    if let Some(trace) = parent_trace {
-        if !set_parent_from_w3c_trace_context(span, trace) {
-            tracing::warn!(
-                rpc_method = method,
-                rpc_request_id = %request_id,
-                "ignoring invalid inbound request trace carrier"
-            );
-        }
-    } else if let Some(context) = traceparent_context_from_env() {
-        set_parent_from_context(span, context);
-    }
 }
 
 fn client_name<'a>(

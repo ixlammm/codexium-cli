@@ -541,6 +541,24 @@ struct AppServerCommand {
     #[arg(long = "stdio", conflicts_with = "listen")]
     stdio: bool,
 
+    /// Codexium Patch: controls whether analytics are enabled by default.
+    ///
+    /// Analytics are disabled by default for app-server. Users have to explicitly opt in
+    /// via the `analytics` section in the config.toml file.
+    ///
+    /// However, for first-party use cases like the desktop app, we default analytics
+    /// to be enabled by default by setting this flag. Users can still opt out by setting this
+    /// in their config.toml:
+    ///
+    /// ```toml
+    /// [analytics]
+    /// enabled = false
+    /// ```
+    ///
+    /// See https://developers.openai.com/codex/config-advanced/#metrics for more details.
+    #[arg(long = "analytics-default-enabled")]
+    analytics_default_enabled: bool,
+
     /// Enable remote control for this app-server process without changing persistence.
     #[arg(long = "remote-control", hide = true)]
     remote_control: bool,
@@ -560,9 +578,6 @@ struct AppServerCommand {
     /// ```
     ///
     /// See https://developers.openai.com/codex/config-advanced/#metrics for more details.
-    #[arg(long = "analytics-default-enabled")]
-    analytics_default_enabled: bool,
-
     #[command(flatten)]
     auth: codex_app_server::AppServerWebsocketAuthArgs,
 }
@@ -1130,7 +1145,10 @@ async fn cli_main(
                 listen,
                 stdio,
                 remote_control,
-                analytics_default_enabled,
+                // Codexium Patch: accepted for compatibility with the desktop app's
+                // spawn command, which passes `--analytics-default-enabled`. This
+                // build defaults analytics off; the flag is intentionally a no-op.
+                analytics_default_enabled: _analytics_default_enabled,
                 auth,
             } = app_server_cli;
             let strict_config = app_server_strict_config || root_strict_config;
@@ -1169,7 +1187,6 @@ async fn cli_main(
                         root_config_overrides,
                         LoaderOverrides::default(),
                         strict_config,
-                        analytics_default_enabled,
                         transport,
                         codex_protocol::protocol::SessionSource::VSCode,
                         auth,
@@ -1741,7 +1758,7 @@ async fn run_exec_server_command(
             .environment_id
             .ok_or_else(|| anyhow::anyhow!("--environment-id is required when --remote is set"))?;
         let config = load_exec_server_config(root_config_overrides, strict_config).await?;
-        let (_otel, telemetry) = exec_server_telemetry::init(Some(&config));
+        exec_server_telemetry::init(Some(&config));
         let auth_provider =
             load_exec_server_remote_auth_provider(&config, &base_url, cmd.use_agent_identity_auth)
                 .await?;
@@ -1755,7 +1772,6 @@ async fn run_exec_server_command(
             remote_config.name = name;
         }
         remote_config.request_dispatch_mode = cmd.request_dispatch_mode;
-        let remote_config = remote_config.with_telemetry(telemetry);
         let parent_lifetime = if cmd.exit_on_stdin_close {
             exec_server_telemetry::ParentLifetime::StdinPipe
         } else {
@@ -1785,7 +1801,7 @@ async fn run_exec_server_command(
         } else {
             config_result.ok()
         };
-        let (_otel, telemetry) = exec_server_telemetry::init(config.as_ref());
+        exec_server_telemetry::init(config.as_ref());
         let http_client_factory = config
             .as_ref()
             .map(codex_core::config::Config::http_client_factory)
@@ -1799,10 +1815,9 @@ async fn run_exec_server_command(
             .unwrap_or_else(|| codex_exec_server::DEFAULT_LISTEN_URL.to_string());
         exec_server_telemetry::run_until_shutdown(
             async move {
-                codex_exec_server::run_main_with_telemetry(
+                codex_exec_server::run_main(
                     &listen_url,
                     runtime_paths,
-                    telemetry,
                     http_client_factory,
                     cmd.request_dispatch_mode,
                 )
@@ -3793,9 +3808,8 @@ mod tests {
     }
 
     #[test]
-    fn app_server_analytics_default_disabled_without_flag() {
+    fn app_server_defaults_to_stdio_transport() {
         let app_server = app_server_from_args(["codex", "app-server"].as_ref());
-        assert!(!app_server.analytics_default_enabled);
         assert!(!app_server.remote_control);
         assert_eq!(
             app_server.listen,
@@ -3807,13 +3821,6 @@ mod tests {
     fn app_server_remote_control_startup_flag_enables_remote_control() {
         let enabled = app_server_from_args(["codex", "app-server", "--remote-control"].as_ref());
         assert!(enabled.remote_control);
-    }
-
-    #[test]
-    fn app_server_analytics_default_enabled_with_flag() {
-        let app_server =
-            app_server_from_args(["codex", "app-server", "--analytics-default-enabled"].as_ref());
-        assert!(app_server.analytics_default_enabled);
     }
 
     #[test]

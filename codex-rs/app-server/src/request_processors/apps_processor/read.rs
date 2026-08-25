@@ -2,14 +2,12 @@ use super::*;
 use crate::app_info::connector_metadata_to_api;
 
 pub(in crate::request_processors) const APP_READ_MAX_IDS: usize = 100;
-const APPS_READ_DURATION_METRIC: &str = "codex.apps.read.duration_ms";
 
 impl AppsRequestProcessor {
     pub(crate) async fn apps_read(
         &self,
         params: AppsReadParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let started_at = Instant::now();
         let AppsReadParams {
             app_ids,
             thread_id,
@@ -39,7 +37,6 @@ impl AppsRequestProcessor {
                 apps: Vec::new(),
                 missing_app_ids: app_ids,
             };
-            record_apps_read_duration(started_at, include_tools);
             return Ok(Some(response.into()));
         }
         let auth = auth
@@ -75,18 +72,6 @@ impl AppsRequestProcessor {
             apps,
             missing_app_ids,
         };
-        record_apps_read_duration(started_at, include_tools);
         Ok(Some(response.into()))
-    }
-}
-
-fn record_apps_read_duration(started_at: Instant, include_tools: bool) {
-    let include_tools = if include_tools { "true" } else { "false" };
-    if let Some(metrics) = codex_otel::global() {
-        let _ = metrics.record_duration(
-            APPS_READ_DURATION_METRIC,
-            started_at.elapsed(),
-            &[("include_tools", include_tools)],
-        );
     }
 }

@@ -24,7 +24,6 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 
-use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
 use crate::connection_cleanup::ConnectionCleanupTasks;
 use crate::message_processor::MessageProcessor;
@@ -49,7 +48,6 @@ use crate::transport::start_control_socket_acceptor;
 use crate::transport::start_remote_control;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
-use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::ServerNotification;
@@ -64,7 +62,6 @@ use codex_core::config::find_codex_home;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_features::Feature;
-use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout::state_db as rollout_state_db;
 use codex_state::log_db;
@@ -83,7 +80,6 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 const SQLITE_RECOVERY_CONFIG_WARNING_SUMMARY: &str = "Codex rebuilt its local database.";
 
-mod analytics_utils;
 mod app_info;
 mod app_server_tracing;
 mod attestation;
@@ -112,7 +108,6 @@ mod mcp_refresh;
 mod message_processor;
 mod models;
 mod models_refresh_worker;
-mod otel_reloader;
 mod outgoing_message;
 mod request_processors;
 mod request_serialization;
@@ -135,7 +130,6 @@ pub use crate::transport::auth::WebsocketAuthCliMode;
 pub use crate::transport::take_remote_control_disabled_env;
 
 const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
-const OTEL_SERVICE_NAME: &str = "codex-app-server";
 #[cfg(debug_assertions)]
 const TEST_USER_CONFIG_FILE_ENV_VAR: &str = "CODEX_APP_SERVER_TEST_USER_CONFIG_FILE";
 
@@ -411,14 +405,12 @@ pub async fn run_main(
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
     strict_config: bool,
-    default_analytics_enabled: bool,
 ) -> IoResult<()> {
     run_main_with_transport_options(
         arg0_paths,
         cli_config_overrides,
         loader_overrides,
         strict_config,
-        default_analytics_enabled,
         AppServerTransport::Stdio,
         SessionSource::VSCode,
         AppServerWebsocketAuthSettings::default(),
@@ -458,7 +450,6 @@ pub async fn run_main_with_transport_options(
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
     strict_config: bool,
-    default_analytics_enabled: bool,
     transport: AppServerTransport,
     session_source: SessionSource,
     auth: AppServerWebsocketAuthSettings,
@@ -587,20 +578,6 @@ pub async fn run_main_with_transport_options(
     .map(Arc::new)
     .map_err(std::io::Error::other)?;
 
-    let otel = codex_core::otel_init::build_provider(
-        &config,
-        env!("CARGO_PKG_VERSION"),
-        Some(OTEL_SERVICE_NAME),
-        default_analytics_enabled,
-    )
-    .map_err(|e| {
-        std::io::Error::new(
-            ErrorKind::InvalidData,
-            format!("error loading otel config: {e}"),
-        )
-    })?;
-    codex_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
-    codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
     let unix_socket_startup_lock = match &transport {
         AppServerTransport::UnixSocket { socket_path } => {
             let startup_lock_path = app_server_startup_lock_path(&codex_home)?;
@@ -655,8 +632,6 @@ pub async fn run_main_with_transport_options(
         });
     }
 
-    let feedback = CodexFeedback::new();
-
     // Install a simple subscriber so `tracing` output is visible. Users can
     // control the log level with `RUST_LOG` and switch to JSON logs with
     // `LOG_FORMAT=json`.
@@ -674,19 +649,13 @@ pub async fn run_main_with_transport_options(
             .boxed(),
     };
 
-    let feedback_layer = feedback.logger_layer();
-    let feedback_metadata_layer = feedback.metadata_layer();
     let log_db = state_db.clone().map(log_db::start);
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(log_db::default_filter()));
-    let (otel_layers, otel_logger_reload_handle) = otel_reloader::layers(otel.as_ref());
     let _ = tracing_subscriber::registry()
         .with(stderr_fmt)
-        .with(feedback_layer)
-        .with(feedback_metadata_layer)
         .with(log_db_layer)
-        .with(otel_layers)
         .try_init();
     for warning in &config_warnings {
         match &warning.details {
@@ -827,15 +796,6 @@ pub async fn run_main_with_transport_options(
     }
     transport_accept_handles.push(remote_control_accept_handle);
 
-    let otel_reloader_handle = otel_reloader::spawn(
-        otel,
-        otel_logger_reload_handle,
-        config_manager.clone(),
-        Arc::clone(&auth_manager),
-        default_analytics_enabled,
-        transport_shutdown_token.clone(),
-    );
-
     let outbound_handle = tokio::spawn(async move {
         let mut outbound_connections = HashMap::<ConnectionId, OutboundConnectionState>::new();
         loop {
@@ -893,22 +853,15 @@ pub async fn run_main_with_transport_options(
 
     let processor_handle = tokio::spawn({
         let auth_manager = Arc::clone(&auth_manager);
-        let analytics_events_client =
-            analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
-        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
-            outgoing_tx,
-            analytics_events_client.clone(),
-        ));
+        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
         let initialize_notification_sender = outgoing_message_sender.clone();
         let outbound_control_tx = outbound_control_tx;
         let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
-            analytics_events_client,
             arg0_paths,
             config: Arc::new(config),
             config_manager,
             environment_manager,
-            feedback: feedback.clone(),
             log_db,
             state_db: state_db.clone(),
             config_warnings,
@@ -916,7 +869,6 @@ pub async fn run_main_with_transport_options(
             auth_manager,
             installation_id,
             code_mode_session_provider,
-            rpc_transport: analytics_rpc_transport(&transport),
             remote_control_handle: Some(remote_control_handle.clone()),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,
         }));
@@ -1196,7 +1148,6 @@ pub async fn run_main_with_transport_options(
     let _ = outbound_handle.await;
 
     transport_shutdown_token.cancel();
-    let _ = otel_reloader_handle.await;
     for handle in transport_accept_handles {
         let _ = handle.await;
     }
@@ -1363,15 +1314,6 @@ fn loader_overrides_with_test_user_config_file(
     let _ = test_user_config_file;
 
     Ok(loader_overrides)
-}
-
-fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransport {
-    match transport {
-        AppServerTransport::Stdio => AppServerRpcTransport::Stdio,
-        AppServerTransport::UnixSocket { .. }
-        | AppServerTransport::WebSocket { .. }
-        | AppServerTransport::Off => AppServerRpcTransport::Websocket,
-    }
 }
 
 #[cfg(test)]

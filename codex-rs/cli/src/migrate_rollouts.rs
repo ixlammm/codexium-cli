@@ -55,17 +55,6 @@ pub(crate) async fn run(
         .cli_overrides(overrides)
         .build()
         .await?;
-    let otel = codex_core::otel_init::build_provider(
-        &config,
-        env!("CARGO_PKG_VERSION"),
-        /*service_name_override*/ None,
-        /*default_analytics_enabled*/ true,
-    )
-    .unwrap_or_else(|error| {
-        eprintln!("Could not create otel exporter: {error}");
-        None
-    });
-    codex_core::otel_init::record_process_start(otel.as_ref(), "codex_migrate_rollouts");
     let mode = if command.apply {
         RolloutMigrationMode::Apply
     } else {

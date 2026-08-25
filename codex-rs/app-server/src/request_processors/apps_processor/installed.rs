@@ -16,37 +16,15 @@ use codex_mcp::tool_is_model_visible;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::PermissionProfile;
 
-#[cfg(test)]
-#[path = "installed_tests.rs"]
-mod tests;
-
 const CONNECTOR_RUNTIME_REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
 const APPS_INSTALLED_SUBMIT_ID: &str = "app-installed";
-const APPS_INSTALLED_RESPONSE_BYTES_METRIC: &str = "codex.apps.installed.response_bytes";
-const APPS_INSTALLED_CONNECTOR_COUNT_METRIC: &str = "codex.apps.installed.connector_count";
-const APPS_INSTALLED_TOOL_COUNT_METRIC: &str = "codex.apps.installed.tool_count";
-const APPS_SNAPSHOT_AGE_METRIC: &str = "codex.apps.snapshot.age_ms";
-
-struct AppsInstalledSnapshotMetrics {
-    age: Option<Duration>,
-    tool_count: usize,
-}
 
 impl AppsRequestProcessor {
     pub(crate) async fn apps_installed(
         &self,
         params: AppsInstalledParams,
     ) -> Result<AppsInstalledResponse, JSONRPCErrorError> {
-        let started_at = Instant::now();
         let force_refresh = params.force_refresh;
-        let mut retained_previous_snapshot = false;
-        let mut refresh_disposition = if force_refresh {
-            "not_started"
-        } else {
-            "not_requested"
-        };
-        let mut snapshot_age = None;
-        let mut snapshot_tool_count = 0;
         let result = async {
             let config = self
                 .load_apps_config(params.thread_id.as_deref())
@@ -139,35 +117,20 @@ impl AppsRequestProcessor {
                 .await;
 
                 match refresh_result {
-                    Ok(snapshot) => {
-                        refresh_disposition = "success";
-                        Some(snapshot)
-                    }
+                    Ok(snapshot) => Some(snapshot),
                     Err(err) => {
-                        refresh_disposition = "error";
-                        retained_previous_snapshot = previous_snapshot.is_some();
                         return Err(internal_error(format!(
                             "failed to refresh installed connector runtime state: {err:#}"
                         )));
                     }
                 }
             } else {
-                if force_refresh {
-                    refresh_disposition = if !apps_enabled {
-                        "skipped_apps_disabled"
-                    } else {
-                        "skipped_workspace_disabled"
-                    };
-                    retained_previous_snapshot = previous_snapshot.is_some();
-                }
                 previous_snapshot
             };
             let Some(snapshot) = snapshot else {
                 return Ok(AppsInstalledResponse { apps: Vec::new() });
             };
 
-            snapshot_age = Some(snapshot.age());
-            snapshot_tool_count = snapshot.tools().len();
             let apps = installed_connector_runtime(
                 &config.config_layer_stack,
                 snapshot.tools().iter().map(connector_runtime_tool),
@@ -184,20 +147,6 @@ impl AppsRequestProcessor {
         }
         .await;
 
-        if let Some(metrics) = codex_otel::global() {
-            record_apps_installed_metrics(
-                &metrics,
-                started_at,
-                force_refresh,
-                retained_previous_snapshot,
-                refresh_disposition,
-                AppsInstalledSnapshotMetrics {
-                    age: snapshot_age,
-                    tool_count: snapshot_tool_count,
-                },
-                result.as_ref().ok(),
-            );
-        }
         result
     }
 }
@@ -218,61 +167,5 @@ fn connector_runtime_tool(tool: &ToolInfo) -> ConnectorRuntimeTool<'_> {
                 .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY)),
         ),
         model_visible: tool_is_model_visible(tool),
-    }
-}
-
-fn record_apps_installed_metrics(
-    metrics: &codex_otel::MetricsClient,
-    started_at: Instant,
-    force_refresh: bool,
-    retained_previous_snapshot: bool,
-    refresh_disposition: &'static str,
-    snapshot_metrics: AppsInstalledSnapshotMetrics,
-    response: Option<&AppsInstalledResponse>,
-) {
-    let Some(response) = response else {
-        return;
-    };
-    let force_refresh = if force_refresh { "true" } else { "false" };
-    let retained_previous_snapshot = if retained_previous_snapshot {
-        "true"
-    } else {
-        "false"
-    };
-    let _ = metrics.record_duration(
-        APPS_INSTALLED_DURATION_METRIC,
-        started_at.elapsed(),
-        &[
-            ("path", "installed"),
-            ("reload", force_refresh),
-            ("force_refresh", force_refresh),
-            ("refresh", refresh_disposition),
-            ("outcome", "success"),
-            ("retained_previous_snapshot", retained_previous_snapshot),
-        ],
-    );
-    if let Ok(bytes) = serde_json::to_vec(response) {
-        let _ = metrics.histogram(
-            APPS_INSTALLED_RESPONSE_BYTES_METRIC,
-            i64::try_from(bytes.len()).unwrap_or(i64::MAX),
-            &[("path", "new")],
-        );
-    }
-    let _ = metrics.histogram(
-        APPS_INSTALLED_CONNECTOR_COUNT_METRIC,
-        i64::try_from(response.apps.len()).unwrap_or(i64::MAX),
-        &[("path", "new")],
-    );
-    let _ = metrics.histogram(
-        APPS_INSTALLED_TOOL_COUNT_METRIC,
-        i64::try_from(snapshot_metrics.tool_count).unwrap_or(i64::MAX),
-        &[("path", "new")],
-    );
-    if let Some(snapshot_age) = snapshot_metrics.age {
-        let _ = metrics.record_duration(
-            APPS_SNAPSHOT_AGE_METRIC,
-            snapshot_age,
-            &[("path", "new"), ("observation", "installed")],
-        );
     }
 }

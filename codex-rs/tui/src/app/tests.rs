@@ -99,7 +99,6 @@ use codex_app_server_protocol::WarningNotification;
 use codex_history::RolloutItem;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 use codex_models_manager::test_support::get_model_offline_for_tests;
-use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -430,7 +429,6 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
         has_chatgpt_account: false,
         has_codex_backend_auth: false,
         model_catalog: app.model_catalog.clone(),
-        feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: false,
         status_account_display: None,
         runtime_model_provider_base_url: None,
@@ -439,7 +437,6 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
         startup_tooltip_override: None,
         status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
         terminal_title_invalid_items_warned: app.terminal_title_invalid_items_warned.clone(),
-        session_telemetry: app.session_telemetry.clone(),
     });
 
     app.enqueue_primary_thread_session(
@@ -4784,11 +4781,9 @@ async fn make_test_app() -> App {
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
-    let session_telemetry = test_session_telemetry(&config, model.as_str());
 
     App {
         model_catalog: chat_widget.model_catalog(),
-        session_telemetry,
         app_event_tx,
         chat_widget,
         workspace_command_runner: None,
@@ -4821,8 +4816,6 @@ async fn make_test_app() -> App {
         skill_load_warnings: SkillLoadWarningState::default(),
         backtrack: BacktrackState::default(),
         backtrack_render_pending: false,
-        feedback: codex_feedback::CodexFeedback::new(),
-        feedback_audience: FeedbackAudience::External,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         app_server_target: crate::AppServerTarget::Embedded,
         pending_update_action: None,
@@ -4856,12 +4849,10 @@ async fn make_test_app_with_channels() -> (
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
-    let session_telemetry = test_session_telemetry(&config, model.as_str());
 
     (
         App {
             model_catalog: chat_widget.model_catalog(),
-            session_telemetry,
             app_event_tx,
             chat_widget,
             workspace_command_runner: None,
@@ -4894,8 +4885,6 @@ async fn make_test_app_with_channels() -> (
             skill_load_warnings: SkillLoadWarningState::default(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
-            feedback: codex_feedback::CodexFeedback::new(),
-            feedback_audience: FeedbackAudience::External,
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
             app_server_target: crate::AppServerTarget::Embedded,
             pending_update_action: None,
@@ -5655,95 +5644,6 @@ fn request_user_input_request(thread_id: ThreadId, turn_id: &str, item_id: &str)
     }
 }
 
-#[tokio::test]
-async fn feedback_submission_without_thread_emits_error_history_cell() {
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-
-    app.handle_feedback_submitted(
-        /*origin_thread_id*/ None,
-        FeedbackCategory::Bug,
-        /*include_logs*/ true,
-        Err("boom".to_string()),
-    )
-    .await;
-
-    let cell = match app_event_rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
-        other => panic!("expected feedback error history cell, saw {other:?}"),
-    };
-    assert_eq!(
-        lines_to_single_string(&cell.display_lines(/*width*/ 120)),
-        "■ Failed to upload feedback: boom"
-    );
-}
-
-#[tokio::test]
-async fn feedback_submission_for_inactive_thread_replays_into_origin_thread() {
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    let origin_thread_id = ThreadId::new();
-    let active_thread_id = ThreadId::new();
-    let origin_session = test_thread_session(origin_thread_id, test_path_buf("/tmp/origin"));
-    let active_session = test_thread_session(active_thread_id, test_path_buf("/tmp/active"));
-    app.thread_event_channels.insert(
-        origin_thread_id,
-        ThreadEventChannel::new_with_session(
-            THREAD_EVENT_CHANNEL_CAPACITY,
-            origin_session.clone(),
-            Vec::new(),
-        ),
-    );
-    app.thread_event_channels.insert(
-        active_thread_id,
-        ThreadEventChannel::new_with_session(
-            THREAD_EVENT_CHANNEL_CAPACITY,
-            active_session.clone(),
-            Vec::new(),
-        ),
-    );
-    app.activate_thread_channel(active_thread_id).await;
-    app.chat_widget.handle_thread_session(active_session);
-    while app_event_rx.try_recv().is_ok() {}
-
-    app.handle_feedback_submitted(
-        Some(origin_thread_id),
-        FeedbackCategory::Bug,
-        /*include_logs*/ true,
-        Ok("uploaded-thread".to_string()),
-    )
-    .await;
-
-    assert_matches!(
-        app_event_rx.try_recv(),
-        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-    );
-
-    let snapshot = {
-        let channel = app
-            .thread_event_channels
-            .get(&origin_thread_id)
-            .expect("origin thread channel should exist");
-        let store = channel.store.lock().await;
-        assert!(matches!(
-            store.buffer.back(),
-            Some(ThreadBufferedEvent::FeedbackSubmission(_))
-        ));
-        store.snapshot()
-    };
-
-    app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
-
-    let mut rendered_cells = Vec::new();
-    while let Ok(event) = app_event_rx.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = event {
-            rendered_cells.push(lines_to_single_string(&cell.display_lines(/*width*/ 120)));
-        }
-    }
-    assert!(rendered_cells.iter().any(|cell| {
-        cell.contains("• Feedback uploaded. Please open an issue using the following URL:")
-            && cell.contains("uploaded-thread")
-    }));
-}
-
 fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
     let mut seen = Vec::new();
     while let Ok(op) = op_rx.try_recv() {
@@ -5766,23 +5666,6 @@ fn lines_to_single_string(lines: &[Line<'_>]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
-    let model_info =
-        construct_model_info_offline_for_tests(model, &config.to_models_manager_config());
-    SessionTelemetry::new(
-        ThreadId::new(),
-        model,
-        model_info.slug.as_str(),
-        /*account_id*/ None,
-        /*account_email*/ None,
-        /*auth_mode*/ None,
-        "test_originator".to_string(),
-        /*log_user_prompts*/ false,
-        "test".to_string(),
-        crate::test_support::session_source_cli(),
-    )
 }
 
 #[test]
@@ -6888,7 +6771,6 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         has_chatgpt_account: app.chat_widget.has_chatgpt_account(),
         has_codex_backend_auth: app.chat_widget.has_codex_backend_auth(),
         model_catalog: app.model_catalog.clone(),
-        feedback: app.feedback.clone(),
         is_first_run: false,
         status_account_display: app.chat_widget.status_account_display().cloned(),
         runtime_model_provider_base_url: app
@@ -6900,7 +6782,6 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
         terminal_title_invalid_items_warned: app.terminal_title_invalid_items_warned.clone(),
-        session_telemetry: app.session_telemetry.clone(),
     });
     app.replace_chat_widget(replacement);
 

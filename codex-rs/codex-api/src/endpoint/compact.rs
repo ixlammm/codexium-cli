@@ -4,12 +4,10 @@ use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use codex_client::HttpTransport;
-use codex_client::RequestTelemetry;
 use codex_protocol::models::ResponseItem;
 use http::HeaderMap;
 use http::Method;
 use serde::Deserialize;
-use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -23,12 +21,6 @@ impl<T: HttpTransport> CompactClient<T> {
     pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
-        }
-    }
-
-    pub fn with_telemetry(self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
-        Self {
-            session: self.session.with_request_telemetry(request),
         }
     }
 

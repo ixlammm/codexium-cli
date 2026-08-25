@@ -14,11 +14,9 @@ pub(super) async fn make_test_app() -> App {
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
-    let session_telemetry = test_session_telemetry(&config, model.as_str());
 
     App {
         model_catalog: chat_widget.model_catalog(),
-        session_telemetry,
         app_event_tx,
         chat_widget,
         workspace_command_runner: None,
@@ -51,8 +49,6 @@ pub(super) async fn make_test_app() -> App {
         skill_load_warnings: SkillLoadWarningState::default(),
         backtrack: BacktrackState::default(),
         backtrack_render_pending: false,
-        feedback: codex_feedback::CodexFeedback::new(),
-        feedback_audience: FeedbackAudience::External,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         app_server_target: crate::AppServerTarget::Embedded,
         pending_update_action: None,
@@ -75,24 +71,6 @@ pub(super) async fn make_test_app() -> App {
         pending_plugin_enabled_writes: HashMap::new(),
         pending_hook_enabled_writes: HashMap::new(),
     }
-}
-
-fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
-    let model_info =
-        construct_model_info_offline_for_tests(model, &config.to_models_manager_config());
-    SessionTelemetry::new(
-        ThreadId::new(),
-        model,
-        model_info.slug.as_str(),
-        /*account_id*/ None,
-        /*account_email*/ None,
-        /*auth_mode*/ None,
-        "test_originator".to_string(),
-        /*log_user_prompts*/ false,
-        "test".to_string(),
-        serde_json::from_value(serde_json::json!("cli"))
-            .expect("cli session source should deserialize"),
-    )
 }
 
 pub(super) fn app_enabled_in_effective_config(config: &Config, app_id: &str) -> Option<bool> {

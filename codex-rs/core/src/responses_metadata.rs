@@ -1,11 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-use codex_analytics::CompactionImplementation;
-use codex_analytics::CompactionPhase;
-use codex_analytics::CompactionReason;
-use codex_analytics::CompactionStrategy;
-use codex_analytics::CompactionTrigger;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
@@ -83,6 +78,49 @@ const MAX_EXTRA_METADATA_ENTRIES: usize = 16;
 const MAX_EXTRA_METADATA_KEY_BYTES: usize = 64;
 const MAX_EXTRA_METADATA_VALUE_BYTES: usize = 128;
 
+/// How conversation compaction was initiated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CompactionTrigger {
+    Auto,
+    Manual,
+}
+
+/// Why conversation compaction ran.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CompactionReason {
+    UserRequested,
+    ContextLimit,
+    ModelDownshift,
+    CompHashChanged,
+}
+
+/// Which compaction implementation dispatched the request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CompactionImplementation {
+    Responses,
+    ResponsesCompactionV2,
+    ResponsesCompact,
+}
+
+/// When in the turn lifecycle compaction ran.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CompactionPhase {
+    MidTurn,
+    PreTurn,
+    StandaloneTurn,
+}
+
+/// The compaction strategy used to summarize conversation history.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CompactionStrategy {
+    Memento,
+}
+
 /// Metadata attached to model requests whose purpose is conversation compaction.
 ///
 /// This covers both local compaction requests sent through the normal `/responses` path and remote
@@ -116,18 +154,6 @@ impl CompactionTurnMetadata {
 
     pub(crate) fn trigger(self) -> CompactionTrigger {
         self.trigger
-    }
-
-    pub(crate) fn reason(self) -> CompactionReason {
-        self.reason
-    }
-
-    pub(crate) fn implementation(self) -> CompactionImplementation {
-        self.implementation
-    }
-
-    pub(crate) fn phase(self) -> CompactionPhase {
-        self.phase
     }
 }
 

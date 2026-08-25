@@ -26,7 +26,6 @@ use crate::session::GitEnrichmentPolicy;
 use crate::session::SUBMISSION_CHANNEL_CAPACITY;
 use crate::session::SessionIo;
 use crate::session::SessionSpawnArgs;
-use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use codex_history::InitialHistory;
@@ -101,16 +100,13 @@ pub(crate) async fn run_codex_thread_interactive(
         originator: parent_ctx.originator.clone(),
         agent_control: parent_session.services.agent_control.clone(),
         dynamic_tools: Vec::new(),
-        metrics_service_name: None,
         user_shell_override: None,
         inherited_environments: Some(parent_environments.clone()),
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
-        parent_trace: None,
         environment_selections: parent_environments.to_selections(),
         thread_extension_init: codex_extension_api::ExtensionDataInit::default(),
         client_mcp_extensions: parent_session.services.client_mcp_extensions.clone(),
-        analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         thread_store: Arc::clone(&parent_session.services.thread_store),
         attestation_provider: parent_session.services.attestation_provider.clone(),
         external_time_provider: Some(Arc::clone(&parent_session.services.time_provider)),
@@ -120,17 +116,6 @@ pub(crate) async fn run_codex_thread_interactive(
     }))
     .or_cancel(&cancel_token)
     .await??;
-    let thread_config = session.thread_config_snapshot().await;
-    let client_metadata = parent_session.app_server_client_metadata().await;
-    emit_subagent_session_started(
-        &parent_session.services.analytics_events_client,
-        client_metadata,
-        session.session_id(),
-        session.thread_id(),
-        Some(parent_session.thread_id),
-        thread_config,
-        subagent_source,
-    );
     // Use a child token so parent cancel cascades but we can scope it to this task
     let cancel_token_events = cancel_token.child_token();
     let cancel_token_ops = cancel_token.child_token();

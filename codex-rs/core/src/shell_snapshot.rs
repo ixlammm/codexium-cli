@@ -15,7 +15,6 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use codex_exec_server::Environment;
-use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -33,7 +32,6 @@ pub(crate) struct ShellSnapshot {
 struct ShellSnapshotConfig {
     codex_home: AbsolutePathBuf,
     session_id: ThreadId,
-    session_telemetry: SessionTelemetry,
     state_db: Option<StateDbHandle>,
 }
 
@@ -50,14 +48,12 @@ impl ShellSnapshot {
     pub(crate) fn new(
         codex_home: AbsolutePathBuf,
         session_id: ThreadId,
-        session_telemetry: SessionTelemetry,
         state_db: Option<StateDbHandle>,
     ) -> Self {
         Self {
             config: Some(Arc::new(ShellSnapshotConfig {
                 codex_home,
                 session_id,
-                session_telemetry,
                 state_db,
             })),
         }
@@ -92,9 +88,6 @@ impl ShellSnapshot {
     ) -> Option<Arc<ShellSnapshotFile>> {
         let snapshot_span = info_span!("shell_snapshot", thread_id = %config.session_id);
         async {
-            let timer = config
-                .session_telemetry
-                .start_timer("codex.shell_snapshot.duration_ms", &[]);
             let snapshot = ShellSnapshot::try_create(
                 &config.codex_home,
                 config.session_id,
@@ -103,15 +96,6 @@ impl ShellSnapshot {
                 config.state_db.clone(),
             )
             .await;
-            let success_tag = if snapshot.is_ok() { "true" } else { "false" };
-            let _ = timer.map(|timer| timer.record(&[("success", success_tag)]));
-            let mut counter_tags = vec![("success", success_tag)];
-            if let Some(failure_reason) = snapshot.as_ref().err() {
-                counter_tags.push(("failure_reason", *failure_reason));
-            }
-            config
-                .session_telemetry
-                .counter("codex.shell_snapshot", /*inc*/ 1, &counter_tags);
             snapshot.ok().map(Arc::new)
         }
         .instrument(snapshot_span)

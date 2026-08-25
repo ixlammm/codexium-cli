@@ -7,7 +7,6 @@ use std::path::Path;
 use std::path::PathBuf;
 #[cfg(test)]
 use std::sync::Arc;
-use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -25,9 +24,7 @@ use super::ConnectorRuntimeContext;
 use super::ConnectorRuntimeIdentity;
 use super::ConnectorRuntimePayload;
 use super::ConnectorRuntimeSnapshot;
-use super::emit_duration;
 
-const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str = "codex.mcp.tools.cache_write.duration_ms";
 const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
 pub(crate) const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 4;
 const CODEX_APPS_SERVER_INFO_CACHE_DIR: &str = "cache/codex_apps_server_info";
@@ -114,7 +111,6 @@ pub(crate) fn persist_codex_apps_cache<T>(
 ) where
     T: ConnectorRuntimePayload,
 {
-    let cache_write_start = Instant::now();
     let tools_result = write_cached_connector_runtime(cache_context, snapshot);
     if let Err(err) = &tools_result {
         tracing::warn!("failed to write connector runtime cache: {err:#}");
@@ -123,16 +119,6 @@ pub(crate) fn persist_codex_apps_cache<T>(
     if let Err(err) = &server_info_result {
         tracing::warn!("failed to write Codex Apps server info cache: {err:#}");
     }
-    let status = if tools_result.is_ok() && server_info_result.is_ok() {
-        "success"
-    } else {
-        "failure"
-    };
-    emit_duration(
-        MCP_TOOLS_CACHE_WRITE_DURATION_METRIC,
-        cache_write_start.elapsed(),
-        &[("status", status)],
-    );
 }
 
 fn read_bounded_cache_file(cache_path: &Path) -> anyhow::Result<(Vec<u8>, SystemTime)> {

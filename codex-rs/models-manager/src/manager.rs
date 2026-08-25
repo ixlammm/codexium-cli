@@ -479,8 +479,6 @@ impl OpenAiModelsManager {
         let Some(cache) = self.cache.as_ref() else {
             return false;
         };
-        let _timer =
-            codex_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
         let client_version = crate::client_version_to_whole();
         info!(client_version, "models cache: evaluating cache eligibility");
         // TODO(celia-oai): Include provider identity in cache eligibility so switching
@@ -664,6 +662,7 @@ pub(crate) fn construct_model_info_from_candidates(
         ModelInfo {
             slug: model.to_string(),
             used_fallback_model_metadata: false,
+            is_custom: false,
             ..remote
         }
     } else {

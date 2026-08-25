@@ -49,6 +49,7 @@ fn remote_model(slug: &str) -> ModelInfo {
     ModelInfo {
         visibility: ModelVisibility::List,
         used_fallback_model_metadata: false,
+        is_custom: false,
         ..model_info_from_slug(slug)
     }
 }

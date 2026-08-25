@@ -28,14 +28,11 @@ use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_state::StateRuntime;
 use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
-use serde_json::Value;
-use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
 use super::analytics::mount_analytics_capture;
-use super::analytics::wait_for_matching_analytics_event;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -492,68 +489,6 @@ async fn thread_archive_succeeds_when_descendant_archive_fails() -> Result<()> {
             },
         })
         .await?;
-    wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
-        event["event_type"] == "codex_thread_archive_event"
-            && event["event_params"]["thread_id"] == parent_id
-            && event["event_params"]["action"] == "unarchived"
-    })
-    .await?;
-
-    let requests = server
-        .received_requests()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("wiremock did not record requests"))?;
-    let mut archive_events = Vec::new();
-    for request in requests {
-        if request.url.path() != "/codex/analytics-events/events" {
-            continue;
-        }
-        let payload: Value = serde_json::from_slice(&request.body)?;
-        let events = payload["events"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("analytics payload missing events array"))?;
-        for event in events
-            .iter()
-            .filter(|event| event["event_type"] == "codex_thread_archive_event")
-        {
-            for (header, expected) in [
-                ("authorization", "Bearer chatgpt-token"),
-                ("chatgpt-account-id", "account-123"),
-            ] {
-                assert_eq!(
-                    request
-                        .headers
-                        .get(header)
-                        .and_then(|value| value.to_str().ok()),
-                    Some(expected)
-                );
-            }
-            archive_events.push(event.clone());
-        }
-    }
-
-    let expected = [
-        (parent_id.as_str(), "archived"),
-        (grandchild_id.as_str(), "archived"),
-        (parent_id.as_str(), "unarchived"),
-    ];
-    assert_eq!(archive_events.len(), expected.len());
-    for (event, (thread_id, action)) in archive_events.iter().zip(expected) {
-        let occurred_at_ms = event["event_params"]["occurred_at_ms"]
-            .as_u64()
-            .expect("thread archive analytics must include its producer timestamp");
-        assert_eq!(
-            event,
-            &json!({
-                "event_type": "codex_thread_archive_event",
-                "event_params": {
-                    "thread_id": thread_id,
-                    "action": action,
-                    "occurred_at_ms": occurred_at_ms,
-                },
-            })
-        );
-    }
 
     Ok(())
 }

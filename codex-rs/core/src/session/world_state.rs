@@ -260,9 +260,7 @@ impl Session {
             .iter()
             .map(|root| root.selected_root().clone())
             .collect::<Vec<_>>();
-        let extension_metrics = super::extension_metrics::from_session_telemetry(
-            turn_context.session_telemetry.clone(),
-        );
+        let extension_metrics = super::extension_metrics::noop_extension_metrics();
         for contributor in self.services.extensions.context_contributors() {
             for section in contributor
                 .contribute_world_state(WorldStateContributionInput {

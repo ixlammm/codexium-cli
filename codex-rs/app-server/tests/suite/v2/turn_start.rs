@@ -94,7 +94,6 @@ use tokio::time::timeout;
 use wiremock::ResponseTemplate;
 
 use super::analytics::mount_analytics_capture;
-use super::analytics::wait_for_analytics_event;
 
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
@@ -905,9 +904,9 @@ async fn thread_start_omits_empty_instruction_overrides_from_model_request() -> 
 }
 
 #[tokio::test]
-async fn turn_start_tracks_thread_originator_in_analytics() -> Result<()> {
+async fn turn_start_retries_stream_on_server_error() -> Result<()> {
     let server = responses::start_mock_server().await;
-    let response_mock = responses::mount_response_sequence(
+    let _response_mock = responses::mount_response_sequence(
         &server,
         vec![
             ResponseTemplate::new(500).set_body_json(json!({
@@ -973,83 +972,11 @@ async fn turn_start_tracks_thread_originator_in_analytics() -> Result<()> {
     )
     .await??;
 
-    let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
-    assert_eq!(event["event_params"]["thread_id"], thread.id);
-    assert_eq!(event["event_params"]["session_id"], thread.session_id);
-    assert_eq!(event["event_params"]["turn_id"], turn.id);
-    assert_eq!(
-        event["event_params"]["app_server_client"]["product_client_id"],
-        "codex_work_desktop"
-    );
-    assert_eq!(event["event_params"]["model"], "mock-model");
-    assert_eq!(event["event_params"]["model_provider"], "mock_provider");
-    assert_eq!(event["event_params"]["sandbox_policy"], "read_only");
-    assert_eq!(event["event_params"]["workspace_kind"], "projectless");
-    assert_eq!(event["event_params"]["ephemeral"], false);
-    assert_eq!(event["event_params"]["thread_source"], "user");
-    assert_eq!(event["event_params"]["initialization_mode"], "new");
-    assert_eq!(
-        event["event_params"]["subagent_source"],
-        serde_json::Value::Null
-    );
-    assert_eq!(
-        event["event_params"]["parent_thread_id"],
-        serde_json::Value::Null
-    );
-    assert_eq!(event["event_params"]["num_input_images"], 1);
-    assert_eq!(
-        event["event_params"]["image_preparations"],
-        json!([{
-            "message_role": "user",
-            "item_id": null,
-            "effective_detail": "high",
-            "source_width": 1,
-            "source_height": 1,
-            "prepared_width": 1,
-            "prepared_height": 1,
-        }])
-    );
-    assert_eq!(event["event_params"]["status"], "completed");
-    assert!(event["event_params"]["started_at"].as_u64().is_some());
-    assert!(event["event_params"]["completed_at"].as_u64().is_some());
-    assert!(event["event_params"]["duration_ms"].as_u64().is_some());
-    assert_eq!(event["event_params"]["input_tokens"], 0);
-    assert_eq!(event["event_params"]["cached_input_tokens"], 0);
-    assert_eq!(event["event_params"]["output_tokens"], 0);
-    assert_eq!(event["event_params"]["reasoning_output_tokens"], 0);
-    assert_eq!(event["event_params"]["total_tokens"], 0);
-    let params = &event["event_params"];
-    let timings_are_numbers = [
-        "before_first_sampling_ms",
-        "sampling_ms",
-        "between_sampling_overhead_ms",
-        "tool_blocking_ms",
-        "after_last_sampling_ms",
-    ]
-    .into_iter()
-    .all(|field| params[field].as_u64().is_some());
-    assert_eq!(
-        json!({
-            "timingsAreNumbers": timings_are_numbers,
-            "toolBlockingMs": params["tool_blocking_ms"],
-            "samplingRequestCount": params["sampling_request_count"],
-            "samplingRetryCount": params["sampling_retry_count"],
-            "responseRequestCount": response_mock.requests().len(),
-        }),
-        json!({
-            "timingsAreNumbers": true,
-            "toolBlockingMs": 0,
-            "samplingRequestCount": 2,
-            "samplingRetryCount": 1,
-            "responseRequestCount": 2,
-        })
-    );
-
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_emits_correlated_production_analytics() -> Result<()> {
+async fn code_mode_exec_runs_dynamic_tool_calls() -> Result<()> {
     let server = responses::start_mock_server().await;
     let _responses = responses::mount_sse_sequence(
         &server,
@@ -1088,27 +1015,11 @@ async fn code_mode_exec_emits_correlated_production_analytics() -> Result<()> {
         })
         .await?;
 
-    let event = wait_for_analytics_event(
-        &server,
-        DEFAULT_READ_TIMEOUT,
-        "codex_dynamic_tool_call_event",
-    )
-    .await?;
-    assert_eq!(
-        json!({
-            "tool": event["event_params"]["tool_name"],
-            "origin": event["event_params"]["originating_response_id"],
-            "subsequent": event["event_params"]["subsequent_response_id"],
-            "hasCell": event["event_params"]["cell_id"].as_str().is_some(),
-        }),
-        json!({"tool":"exec","origin":"resp-1","subsequent":"resp-2","hasCell":true})
-    );
-
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()> {
+async fn turn_profile_blocks_tool_until_user_input() -> Result<()> {
     let responses = vec![
         create_request_user_input_sse_response("call1")?,
         create_final_assistant_message_sse_response("Done")?,
@@ -1183,25 +1094,6 @@ async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
-
-    let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
-    let params = &event["event_params"];
-    assert_eq!(
-        json!({
-            "toolBlockingIsPositive": params["tool_blocking_ms"]
-                .as_u64()
-                .is_some_and(|duration| duration > 0),
-            "samplingRequestCount": params["sampling_request_count"],
-            "samplingRetryCount": params["sampling_retry_count"],
-            "status": params["status"],
-        }),
-        json!({
-            "toolBlockingIsPositive": true,
-            "samplingRequestCount": 2,
-            "samplingRetryCount": 0,
-            "status": "completed",
-        })
-    );
 
     Ok(())
 }

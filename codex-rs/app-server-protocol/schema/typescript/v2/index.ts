@@ -139,8 +139,6 @@ export type { ExternalAgentDetectedConnectorSource } from "./ExternalAgentDetect
 export type { ExternalAgentImportedConnectorCandidate } from "./ExternalAgentImportedConnectorCandidate";
 export type { ExternalAgentImportedConnectorSource } from "./ExternalAgentImportedConnectorSource";
 export type { FeedbackRequirements } from "./FeedbackRequirements";
-export type { FeedbackUploadParams } from "./FeedbackUploadParams";
-export type { FeedbackUploadResponse } from "./FeedbackUploadResponse";
 export type { FileChangeApprovalDecision } from "./FileChangeApprovalDecision";
 export type { FileChangeOutputDeltaNotification } from "./FileChangeOutputDeltaNotification";
 export type { FileChangePatchUpdatedNotification } from "./FileChangePatchUpdatedNotification";

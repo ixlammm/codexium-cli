@@ -60,7 +60,6 @@ use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
-use sha1::Digest;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -266,35 +265,6 @@ fn catalog_extensions(
     });
     (Arc::new(extensions.build()), event_rx)
 }
-
-async fn wait_for_analytics_events(
-    server: &MockServer,
-    event_type: &str,
-    expected_count: usize,
-) -> Vec<Value> {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let events = server
-            .received_requests()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|request| request.url.path() == "/codex/analytics-events/events")
-            .filter_map(|request| serde_json::from_slice::<Value>(&request.body).ok())
-            .flat_map(|payload| payload["events"].as_array().cloned().unwrap_or_default())
-            .filter(|event| event["event_type"] == event_type)
-            .collect::<Vec<_>>();
-        if events.len() >= expected_count {
-            return events;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for {event_type} analytics"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
 fn configure_catalog_test(config: &mut Config) {
     config.include_skill_instructions = true;
     config
@@ -1032,10 +1002,6 @@ async fn explicit_only_orchestrator_skill_is_hidden_but_can_be_invoked() -> Resu
             "next_cursor": null,
         })
     );
-    let events = wait_for_analytics_events(&server, "skill_invocation", /*expected_count*/ 1).await;
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0]["skill_name"], "demo:explicit-only");
-    assert_eq!(events[0]["event_params"]["invoke_type"], "explicit");
 
     test.submit_turn("Continue without explicitly selecting a skill.")
         .await?;
@@ -1056,15 +1022,6 @@ async fn explicit_only_orchestrator_skill_is_hidden_but_can_be_invoked() -> Resu
             "failed skills.read should return a tool error for {call_id}"
         );
     }
-
-    let events = wait_for_analytics_events(&server, "skill_invocation", /*expected_count*/ 2).await;
-    assert_eq!(events.len(), 2, "repeated main reads must be deduplicated");
-    assert_eq!(events[1]["skill_name"], "demo:explicit-only");
-    assert_eq!(
-        events[1]["skill_id"],
-        format!("{:x}", sha1::Sha1::digest(MAIN_RESOURCE.as_bytes()))
-    );
-    assert_eq!(events[1]["event_params"]["invoke_type"], "implicit");
 
     Ok(())
 }
@@ -1326,15 +1283,6 @@ async fn executor_skill_invocation_is_environment_scoped_and_deduplicated() -> R
             "command output: {output}"
         );
     }
-
-    let events = wait_for_analytics_events(&server, "skill_invocation", /*expected_count*/ 1).await;
-    assert_eq!(events.len(), 1, "executor skill should be counted once");
-    assert_eq!(events[0]["skill_name"], "selected-environment-skill");
-    assert_eq!(
-        events[0]["skill_id"],
-        format!("{:x}", sha1::Sha1::digest(SELECTED_RESOURCE.as_bytes()))
-    );
-    assert_eq!(events[0]["event_params"]["invoke_type"], "implicit");
 
     Ok(())
 }
@@ -1813,17 +1761,6 @@ async fn production_turn_uses_provider_host_catalog_and_core_snapshot_injection(
     let user_text = request.message_input_texts("user").join("\n");
     assert!(user_text.contains(&snapshot_contents));
     assert!(!user_text.contains(provider_contents));
-    let app_mentioned_events =
-        wait_for_analytics_events(&server, "codex_app_mentioned", /*expected_count*/ 1).await;
-    let app_mentioned_event = &app_mentioned_events[0];
-    assert_eq!(
-        app_mentioned_event["event_params"]["connector_id"],
-        "calendar"
-    );
-    assert_eq!(
-        app_mentioned_event["event_params"]["invoke_type"],
-        "explicit"
-    );
     Ok(())
 }
 

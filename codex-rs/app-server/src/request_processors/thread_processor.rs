@@ -1201,7 +1201,6 @@ impl ThreadRequestProcessor {
         request_trace: Option<W3cTraceContext>,
         initial_config_warnings: Arc<Vec<ConfigWarningNotification>>,
     ) -> Result<(), JSONRPCErrorError> {
-        let thread_start_started_at = std::time::Instant::now();
         let requested_cwd = typesafe_overrides.cwd.clone();
         let mut config = config_manager
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
@@ -1308,7 +1307,6 @@ impl ThreadRequestProcessor {
         if !selected_capability_roots.is_empty() {
             thread_extension_init.insert(selected_capability_roots);
         }
-        let create_thread_started_at = std::time::Instant::now();
         let NewThread {
             thread_id,
             thread,
@@ -1347,12 +1345,6 @@ impl ThreadRequestProcessor {
                 }
                 _ => internal_error(format!("error creating thread: {err}")),
             })?;
-        let session_telemetry = thread.session_telemetry();
-        session_telemetry.record_startup_phase(
-            "thread_start_create_thread",
-            create_thread_started_at.elapsed(),
-            Some("ready"),
-        );
 
         Self::set_app_server_client_info(
             thread.as_ref(),
@@ -1456,11 +1448,6 @@ impl ThreadRequestProcessor {
                 otel.name = "app_server.thread_start.notify_started",
             ))
             .await;
-        session_telemetry.record_startup_phase(
-            "thread_start_total",
-            thread_start_started_at.elapsed(),
-            Some("ready"),
-        );
         Ok(())
     }
 

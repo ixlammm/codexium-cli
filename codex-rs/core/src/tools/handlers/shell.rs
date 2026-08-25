@@ -24,7 +24,6 @@ use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
-use codex_core_plugins::strip_output_env;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_tools::ToolName;
@@ -81,15 +80,13 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
 
     let fs = turn_environment.environment.get_filesystem();
 
-    let mut explicit_env_overrides = turn
+    let explicit_env_overrides = turn
         .config
         .permissions
         .shell_environment_policy
         .r#set
         .clone();
-    let mut env = exec_params.env.clone();
-    strip_output_env(&mut env);
-    strip_output_env(&mut explicit_env_overrides);
+    let env = exec_params.env.clone();
     let exec_permission_approvals_enabled =
         session.features().enabled(Feature::ExecPermissionApprovals);
     let requested_additional_permissions = additional_permissions.clone();

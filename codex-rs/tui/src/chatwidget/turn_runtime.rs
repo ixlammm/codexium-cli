@@ -40,34 +40,6 @@ impl ChatWidget {
         self.refresh_status_surfaces();
     }
 
-    pub(super) fn collect_runtime_metrics_delta(&mut self) {
-        if let Some(delta) = self.session_telemetry.runtime_metrics_summary() {
-            self.apply_runtime_metrics_delta(delta);
-        }
-    }
-
-    pub(super) fn apply_runtime_metrics_delta(&mut self, delta: RuntimeMetricsSummary) {
-        let should_log_timing = has_websocket_timing_metrics(delta);
-        self.turn_runtime_metrics.merge(delta);
-        if should_log_timing {
-            self.log_websocket_timing_totals(delta);
-        }
-    }
-
-    pub(super) fn log_websocket_timing_totals(&mut self, delta: RuntimeMetricsSummary) {
-        if let Some(label) = history_cell::runtime_metrics_label(delta.responses_api_summary()) {
-            self.add_plain_history_lines(vec![
-                vec!["• ".dim(), format!("WebSocket timing: {label}").dark_gray()].into(),
-            ]);
-        }
-    }
-
-    pub(super) fn refresh_runtime_metrics(&mut self) {
-        self.collect_runtime_metrics_delta();
-    }
-
-    // Raw reasoning uses the same flow as summarized reasoning
-
     pub(super) fn on_task_started(&mut self) {
         self.input_queue.user_turn_pending_start = false;
         self.reset_safety_buffering_for_turn_start();
@@ -77,8 +49,6 @@ impl ChatWidget {
         if self.plan_stream_controller.take().is_some() {
             self.request_pending_usage_output_insertion_after_stream_shutdown();
         }
-        self.turn_runtime_metrics = RuntimeMetricsSummary::default();
-        self.session_telemetry.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
@@ -145,30 +115,19 @@ impl ChatWidget {
         }
         self.flush_unified_exec_wait_streak();
         if !from_replay {
-            self.collect_runtime_metrics_delta();
-            let runtime_metrics =
-                (!self.turn_runtime_metrics.is_empty()).then_some(self.turn_runtime_metrics);
-            let show_work_separator = self.transcript.had_work_activity
-                && (self.transcript.needs_final_message_separator || runtime_metrics.is_some());
-            if show_work_separator || runtime_metrics.is_some() {
-                let elapsed_seconds = if show_work_separator {
-                    duration_ms
-                        .and_then(|duration_ms| u64::try_from(duration_ms).ok())
-                        .map(|duration_ms| duration_ms / 1_000)
-                        .or_else(|| {
-                            self.bottom_pane
-                                .status_widget()
-                                .map(crate::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
-                        })
-                } else {
-                    None
-                };
-                self.add_to_history(history_cell::FinalMessageSeparator::new(
-                    elapsed_seconds,
-                    runtime_metrics,
-                ));
+            let show_work_separator =
+                self.transcript.had_work_activity && self.transcript.needs_final_message_separator;
+            if show_work_separator {
+                let elapsed_seconds = duration_ms
+                    .and_then(|duration_ms| u64::try_from(duration_ms).ok())
+                    .map(|duration_ms| duration_ms / 1_000)
+                    .or_else(|| {
+                        self.bottom_pane.status_widget().map(
+                            crate::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds,
+                        )
+                    });
+                self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
             }
-            self.turn_runtime_metrics = RuntimeMetricsSummary::default();
             self.transcript.needs_final_message_separator = false;
             self.transcript.had_work_activity = false;
             self.request_status_line_branch_refresh();

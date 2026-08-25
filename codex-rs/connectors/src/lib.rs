@@ -33,7 +33,6 @@ pub use app_tool_policy::app_is_enabled;
 pub use app_tool_policy::apps_config_from_layer_stack;
 pub use connector_runtime::ConnectorRuntimeContext;
 pub use connector_runtime::ConnectorRuntimeContextKey;
-pub use connector_runtime::ConnectorRuntimeFetchSource;
 pub use connector_runtime::ConnectorRuntimeFetchTicket;
 pub use connector_runtime::ConnectorRuntimeManager;
 pub use connector_runtime::ConnectorRuntimePayload;

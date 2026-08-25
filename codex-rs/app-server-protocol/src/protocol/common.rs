@@ -1125,12 +1125,6 @@ client_request_definitions! {
         response: v2::SendAddCreditsNudgeEmailResponse,
     },
 
-    FeedbackUpload => "feedback/upload" {
-        params: v2::FeedbackUploadParams,
-        serialization: None,
-        response: v2::FeedbackUploadResponse,
-    },
-
     /// Execute a standalone command (argv vector) under the server's sandbox.
     OneOffCommandExec => "command/exec" {
         params: v2::CommandExecParams,
@@ -1209,6 +1203,38 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: global_shared_read("config"),
         response: v2::ExternalAgentConfigImportHistoriesReadResponse,
+    },
+    // Codexium Patch: read/write the user's custom provider/model config stored
+    // in `codexium/models.json`.
+    CodexiumModelsRead => "codexium/models/read" {
+        params: v2::CodexiumModelsReadParams,
+        serialization: global_shared_read("codexium"),
+        response: v2::CodexiumModelsReadResponse,
+    },
+    CodexiumModelsWrite => "codexium/models/write" {
+        params: v2::CodexiumModelsWriteParams,
+        serialization: global("codexium"),
+        response: v2::CodexiumModelsWriteResponse,
+    },
+    CodexiumRegistryRead => "codexium/registry/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("codexium"),
+        response: v2::CodexiumRegistryReadResponse,
+    },
+    CodexiumProvidersConnect => "codexium/providers/connect" {
+        params: v2::CodexiumProvidersConnectParams,
+        serialization: global("codexium"),
+        response: v2::CodexiumProvidersConnectResponse,
+    },
+    CodexiumProvidersDisconnect => "codexium/providers/disconnect" {
+        params: v2::CodexiumProvidersDisconnectParams,
+        serialization: global("codexium"),
+        response: v2::CodexiumProvidersDisconnectResponse,
+    },
+    CodexiumProvidersCheck => "codexium/providers/check" {
+        params: v2::CodexiumProvidersCheckParams,
+        serialization: global("codexium"),
+        response: v2::CodexiumProvidersCheckResponse,
     },
     ConfigValueWrite => "config/value/write" {
         params: v2::ConfigValueWriteParams,

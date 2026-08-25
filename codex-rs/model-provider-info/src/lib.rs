@@ -410,6 +410,33 @@ impl ModelProviderInfo {
         self.name == OPENAI_PROVIDER_NAME
     }
 
+    /// Codexium Patch: returns the model name to send to the provider API.
+    ///
+    /// The app addresses models as `<provider>.<model>` (e.g. `deepseek.deepseek-v4-flash`).
+    /// Third-party APIs expect only the model name (e.g. `deepseek-v4-flash`), so the
+    /// `<provider>.` prefix is stripped here. First-party OpenAI models are passed through
+    /// unchanged.
+    pub fn wire_model_id(&self, model_id: &str) -> String {
+        if self.is_openai() {
+            return model_id.to_string();
+        }
+        match model_id.split_once('.') {
+            Some((prefix, suffix)) if !prefix.is_empty() && !suffix.is_empty() => {
+                // Only strip when the prefix looks like a plain provider id, so
+                // dotted model names like `kimi-k3` (no provider prefix) are kept.
+                let looks_like_provider = prefix
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+                if looks_like_provider {
+                    suffix.to_string()
+                } else {
+                    model_id.to_string()
+                }
+            }
+            _ => model_id.to_string(),
+        }
+    }
+
     pub fn uses_openai_actor_authorization(&self) -> bool {
         !self.requires_openai_auth
             && self.http_headers.as_ref().is_some_and(|headers| {

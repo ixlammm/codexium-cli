@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use crate::HostSkillsSnapshot;
 use crate::InjectedHostSkillPrompts;
-use codex_analytics::InvocationType;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
@@ -31,7 +30,6 @@ use codex_extension_api::TurnInputContributor;
 use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
 use codex_mcp::McpResourceClient;
-use codex_otel::MetricsClient;
 use codex_protocol::openai_models::ModelInfo;
 
 use crate::SkillsExtensionConfig;
@@ -66,7 +64,6 @@ use crate::state::HostSkillsStepState;
 use crate::state::SkillsSessionState;
 use crate::state::SkillsThreadState;
 use crate::state::SkillsTurnState;
-use crate::tools::SkillAnalytics;
 use crate::tools::SkillToolAuthority;
 use crate::tools::skill_tools;
 use crate::warnings::bounded_warnings;
@@ -440,7 +437,6 @@ where
             let mut warnings = catalog.warnings.clone();
             let mut main_prompts_injected = false;
             let mut injected_host_skill_prompts = InjectedHostSkillPrompts::default();
-            let analytics = SkillAnalytics::from_stores(session_store, thread_store);
             for entry in &selected_entries {
                 match self
                     .read_main_prompt(
@@ -487,15 +483,6 @@ where
                         main_prompts_injected = true;
                         if entry.authority.kind == SkillSourceKind::Host {
                             injected_host_skill_prompts.insert_path(entry.main_prompt.as_str());
-                        } else if let Some(analytics) = analytics.as_ref()
-                            && let Some(model_info) = thread_store.get::<ModelInfo>()
-                        {
-                            analytics.track_skill_invocation(
-                                entry,
-                                model_info.slug.clone(),
-                                input.turn_id.clone(),
-                                InvocationType::Explicit,
-                            );
                         }
                     }
                     Err(message) => {
@@ -644,27 +631,11 @@ pub fn install_with_providers<C>(
 ) where
     C: Send + Sync + 'static,
 {
-    install_with_providers_and_metrics(
-        registry,
-        providers,
-        /*metrics_client*/ None,
-        config_from_host,
-    );
-}
-
-pub fn install_with_providers_and_metrics<C>(
-    registry: &mut ExtensionRegistryBuilder<C>,
-    providers: SkillProviders,
-    metrics_client: Option<MetricsClient>,
-    config_from_host: impl Fn(&C) -> SkillsExtensionConfig + Send + Sync + 'static,
-) where
-    C: Send + Sync + 'static,
-{
     let extension = Arc::new(SkillsExtension {
         providers,
         event_sink: registry.event_sink(),
         config_from_host: Arc::new(config_from_host),
-        shadow_selection: Arc::new(ShadowSelectionExperiment::new(metrics_client)),
+        shadow_selection: Arc::new(ShadowSelectionExperiment::new()),
     });
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());

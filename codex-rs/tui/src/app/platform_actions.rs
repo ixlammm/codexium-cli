@@ -7,7 +7,6 @@ use super::*;
 
 #[derive(Default)]
 pub(super) struct WindowsSandboxState {
-    pub(super) setup_started_at: Option<Instant>,
     // One-shot suppression of the next world-writable scan after user confirmation.
     pub(super) skip_world_writable_scan_once: bool,
 }

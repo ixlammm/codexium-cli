@@ -13,15 +13,10 @@ use codex_core::detached_memory_responses_metadata;
 use codex_core::resolve_installation_id;
 use codex_features::Feature;
 use codex_login::AuthManager;
-use codex_login::CodexAuth;
 use codex_login::auth::AgentIdentityAuthPolicy;
-use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
-use codex_login::default_client::originator;
 use codex_model_provider::ModelProvider;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
-use codex_otel::SessionTelemetry;
-use codex_otel::TelemetryAuthMode;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
@@ -34,7 +29,6 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_state::StateRuntime;
-use codex_terminal_detection::user_agent;
 use futures::StreamExt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -47,24 +41,9 @@ pub(crate) struct SpawnedConsolidationAgent {
 #[derive(Clone, Debug)]
 pub(crate) struct StageOneRequestContext {
     pub(crate) model_info: ModelInfo,
-    pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
     pub(crate) reasoning_summary: ReasoningSummary,
     pub(crate) service_tier: Option<String>,
-}
-
-impl StageOneRequestContext {
-    pub(crate) fn start_timer(&self, name: &str) -> Option<codex_otel::Timer> {
-        self.session_telemetry.start_timer(name, &[]).ok()
-    }
-
-    pub(crate) fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {
-        self.session_telemetry.counter(name, inc, tags);
-    }
-
-    pub(crate) fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) {
-        self.session_telemetry.histogram(name, value, tags);
-    }
 }
 
 pub(crate) struct MemoryStartupContext {
@@ -73,39 +52,6 @@ pub(crate) struct MemoryStartupContext {
     thread_manager: Arc<ThreadManager>,
     auth_manager: Arc<AuthManager>,
     provider: SharedModelProvider,
-    session_telemetry: SessionTelemetry,
-}
-
-fn build_session_telemetry(
-    auth_manager: &AuthManager,
-    thread_id: ThreadId,
-    config: &Config,
-    source: SessionSource,
-    model: &str,
-    originator: String,
-) -> SessionTelemetry {
-    let auth = auth_manager.auth_cached();
-    let auth = auth.as_ref();
-    let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
-    let account_id = auth.and_then(CodexAuth::get_account_id);
-    let account_email = auth.and_then(CodexAuth::get_account_email);
-    let auth_env_telemetry = collect_auth_env_telemetry(
-        &config.model_provider,
-        auth_manager.codex_api_key_env_enabled(),
-    );
-    SessionTelemetry::new(
-        thread_id,
-        model,
-        model,
-        account_id,
-        account_email,
-        auth_mode,
-        originator,
-        config.otel.log_user_prompt,
-        user_agent(),
-        source,
-    )
-    .with_auth_env(auth_env_telemetry.to_otel_metadata())
 }
 
 impl MemoryStartupContext {
@@ -162,23 +108,12 @@ impl MemoryStartupContext {
         source: SessionSource,
         provider: SharedModelProvider,
     ) -> Self {
-        let model = config.model.as_deref().unwrap_or("unknown");
-        let session_telemetry = build_session_telemetry(
-            &auth_manager,
-            thread_id,
-            config,
-            source,
-            model,
-            originator().value,
-        );
-
         Self {
             thread_id,
             thread,
             thread_manager,
             auth_manager,
             provider,
-            session_telemetry,
         }
     }
 
@@ -192,18 +127,6 @@ impl MemoryStartupContext {
 
     pub(crate) fn provider(&self) -> &dyn ModelProvider {
         self.provider.as_ref()
-    }
-
-    pub(crate) fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {
-        self.session_telemetry.counter(name, inc, tags);
-    }
-
-    pub(crate) fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) {
-        self.session_telemetry.histogram(name, value, tags);
-    }
-
-    pub(crate) fn start_timer(&self, name: &str) -> Option<codex_otel::Timer> {
-        self.session_telemetry.start_timer(name, &[]).ok()
     }
 
     pub(crate) async fn stage_one_request_context(
@@ -224,14 +147,6 @@ impl MemoryStartupContext {
 
         StageOneRequestContext {
             model_info,
-            session_telemetry: build_session_telemetry(
-                &self.auth_manager,
-                self.thread_id,
-                config,
-                config_snapshot.session_source,
-                model_name,
-                config_snapshot.originator,
-            ),
             reasoning_effort: Some(reasoning_effort),
             reasoning_summary,
             service_tier: config_snapshot.service_tier,
@@ -283,7 +198,6 @@ impl MemoryStartupContext {
             .stream(
                 prompt,
                 &context.model_info,
-                &context.session_telemetry,
                 context.reasoning_effort.clone(),
                 context.reasoning_summary,
                 context.service_tier.clone(),

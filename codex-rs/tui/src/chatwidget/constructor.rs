@@ -21,7 +21,6 @@ impl ChatWidget {
             has_chatgpt_account,
             has_codex_backend_auth,
             model_catalog,
-            feedback,
             is_first_run,
             status_account_display,
             runtime_model_provider_base_url,
@@ -30,7 +29,6 @@ impl ChatWidget {
             startup_tooltip_override,
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
-            session_telemetry,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -119,7 +117,6 @@ impl ChatWidget {
             has_chatgpt_account,
             has_codex_backend_auth,
             model_catalog,
-            session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             status_account_display,
@@ -218,9 +215,7 @@ impl ChatWidget {
             pending_notification: None,
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
-            turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
-            feedback,
             current_rollout_path: None,
             current_cwd,
             workspace_command_runner,

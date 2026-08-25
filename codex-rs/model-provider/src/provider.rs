@@ -298,6 +298,46 @@ impl ConfiguredModelProvider {
             auth_manager,
         }
     }
+
+    /// Codexium Patch: returns the ChatGPT account described by the current
+    /// managed auth, when the user is signed in with a ChatGPT account.
+    fn chatgpt_account_state(
+        &self,
+    ) -> std::result::Result<Option<ProviderAccount>, ProviderAccountError> {
+        let Some(auth) = self
+            .auth_manager
+            .as_ref()
+            .and_then(|auth_manager| auth_manager.auth_cached())
+        else {
+            return Ok(None);
+        };
+        if self
+            .auth_manager
+            .as_ref()
+            .is_some_and(|auth_manager| auth_manager.refresh_failure_for_auth(&auth).is_some())
+        {
+            return Ok(None);
+        }
+        if matches!(auth, CodexAuth::Headers(_)) {
+            return Ok(None);
+        }
+        match &auth {
+            CodexAuth::ApiKey(_) => Ok(Some(ProviderAccount::ApiKey)),
+            CodexAuth::BedrockApiKey(_) => Err(ProviderAccountError::UnsupportedBedrockApiKeyAuth),
+            CodexAuth::Headers(_) => Ok(None),
+            CodexAuth::Chatgpt(_)
+            | CodexAuth::ChatgptAuthTokens(_)
+            | CodexAuth::AgentIdentity(_)
+            | CodexAuth::PersonalAccessToken(_) => {
+                let email = auth.get_account_email();
+                let plan_type = auth.account_plan_type();
+                plan_type
+                    .map(|plan_type| ProviderAccount::Chatgpt { email, plan_type })
+                    .ok_or(ProviderAccountError::MissingChatgptAccountDetails)
+                    .map(Some)
+            }
+        }
+    }
 }
 
 impl ModelProvider for ConfiguredModelProvider {
@@ -354,43 +394,18 @@ impl ModelProvider for ConfiguredModelProvider {
     }
 
     fn account_state(&self) -> ProviderAccountResult {
-        let account = if self.info.requires_openai_auth {
-            self.auth_manager
-                .as_ref()
-                .and_then(|auth_manager| {
-                    let auth = auth_manager.auth_cached()?;
-                    if auth_manager.refresh_failure_for_auth(&auth).is_some() {
-                        return None;
-                    }
-                    if matches!(auth, CodexAuth::Headers(_)) {
-                        return None;
-                    }
-                    Some(auth)
-                })
-                .map(|auth| match &auth {
-                    CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
-                    CodexAuth::BedrockApiKey(_) => {
-                        Err(ProviderAccountError::UnsupportedBedrockApiKeyAuth)
-                    }
-                    CodexAuth::Chatgpt(_)
-                    | CodexAuth::ChatgptAuthTokens(_)
-                    | CodexAuth::Headers(_)
-                    | CodexAuth::AgentIdentity(_)
-                    | CodexAuth::PersonalAccessToken(_) => {
-                        let email = auth.get_account_email();
-                        let plan_type = auth.account_plan_type();
-
-                        plan_type
-                            .map(|plan_type| ProviderAccount::Chatgpt { email, plan_type })
-                            .ok_or(ProviderAccountError::MissingChatgptAccountDetails)
-                    }
-                })
-                .transpose()?
+        // Codexium Patch: report the real ChatGPT account whenever it is
+        // available, even for custom providers with `requires_openai_auth =
+        // false`. Without this, selecting a custom provider makes the app show
+        // "using API key" instead of the signed-in ChatGPT account.
+        let account = if let Some(chatgpt_account) = self.chatgpt_account_state()? {
+            Some(chatgpt_account)
+        } else if self.info.requires_openai_auth {
+            None
         } else {
-            // Codexium Patch: when a user has set `requires_openai_auth = false`
-            // (the default for custom providers), surface an API-key account so the
-            // runtime model lookup treats the configured provider as a normal
-            // OpenAI-compatible endpoint.
+            // Custom provider with no ChatGPT account: surface an API-key account
+            // so the runtime model lookup treats it as a normal OpenAI-compatible
+            // endpoint.
             Some(ProviderAccount::ApiKey)
         };
 
@@ -805,7 +820,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_non_openai_provider_returns_no_account_state() {
+    fn custom_non_openai_provider_without_auth_returns_api_key_account_state() {
         let provider = create_model_provider(
             ModelProviderInfo {
                 name: "Custom".to_string(),
@@ -817,10 +832,13 @@ mod tests {
             /*auth_manager*/ None,
         );
 
+        // Codexium Patch: with no ChatGPT account available, a custom provider
+        // surfaces an API-key account so the runtime treats it as a normal
+        // OpenAI-compatible endpoint.
         assert_eq!(
             provider.account_state(),
             Ok(ProviderAccountState {
-                account: None,
+                account: Some(ProviderAccount::ApiKey),
                 requires_openai_auth: false,
             })
         );

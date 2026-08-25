@@ -127,8 +127,6 @@ pub(super) use codex_features::Feature;
 pub(super) use codex_git_utils::CommitLogEntry;
 pub(super) use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 pub(super) use codex_models_manager::test_support::get_model_offline_for_tests;
-pub(super) use codex_otel::RuntimeMetricsSummary;
-pub(super) use codex_otel::SessionTelemetry;
 pub(super) use codex_protocol::ThreadId;
 pub(super) use codex_protocol::account::PlanType;
 pub(super) use codex_protocol::approvals::GuardianAssessmentAction;

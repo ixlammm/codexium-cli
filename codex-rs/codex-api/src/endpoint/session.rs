@@ -1,26 +1,23 @@
 use crate::auth::SharedAuthProvider;
 use crate::error::ApiError;
 use crate::provider::Provider;
-use crate::telemetry::run_with_request_telemetry;
 use codex_client::EncodedJsonBody;
 use codex_client::HttpTransport;
 use codex_client::Request;
 use codex_client::RequestBody;
-use codex_client::RequestTelemetry;
 use codex_client::Response;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
+use codex_client::run_with_retry;
 use http::HeaderMap;
 use http::Method;
 use serde_json::Value;
-use std::sync::Arc;
 use tracing::instrument;
 
 pub(crate) struct EndpointSession<T: HttpTransport> {
     transport: T,
     provider: Provider,
     auth: SharedAuthProvider,
-    request_telemetry: Option<Arc<dyn RequestTelemetry>>,
 }
 
 impl<T: HttpTransport> EndpointSession<T> {
@@ -29,16 +26,7 @@ impl<T: HttpTransport> EndpointSession<T> {
             transport,
             provider,
             auth,
-            request_telemetry: None,
         }
-    }
-
-    pub(crate) fn with_request_telemetry(
-        mut self,
-        request: Option<Arc<dyn RequestTelemetry>>,
-    ) -> Self {
-        self.request_telemetry = request;
-        self
     }
 
     pub(crate) fn provider(&self) -> &Provider {
@@ -95,11 +83,10 @@ impl<T: HttpTransport> EndpointSession<T> {
             req
         };
 
-        let response = run_with_request_telemetry(
+        let response = run_with_retry(
             self.provider.retry.to_policy(),
-            self.request_telemetry.clone(),
             make_request,
-            |req| {
+            |req, _attempt| {
                 let auth = self.auth.clone();
                 let transport = &self.transport;
                 async move {
@@ -136,11 +123,10 @@ impl<T: HttpTransport> EndpointSession<T> {
         let request = request.into_prepared().map_err(TransportError::Build)?;
         let make_request = || request.clone();
 
-        let stream = run_with_request_telemetry(
+        let stream = run_with_retry(
             self.provider.retry.to_policy(),
-            self.request_telemetry.clone(),
             make_request,
-            |req| {
+            |req, _attempt| {
                 let auth = self.auth.clone();
                 let transport = &self.transport;
                 async move {

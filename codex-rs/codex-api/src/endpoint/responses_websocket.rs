@@ -3,14 +3,12 @@ use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
 use crate::common::SafetyBufferingTreatment;
-use crate::common::WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
 use crate::safety_buffering::treatment_from_headers;
 use crate::sse::ResponsesStreamEvent;
 use crate::sse::process_responses_event;
-use crate::telemetry::WebsocketTelemetry;
 use codex_client::TransportError;
 use codex_http_client::HttpClientFactory;
 use codex_websocket_client::WebSocketConnection;
@@ -30,7 +28,6 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -172,7 +169,6 @@ struct ResponsesWebsocketTimingLogContext {
     session_id: Option<String>,
     thread_id: Option<String>,
     turn_id: Option<String>,
-    traceparent: Option<String>,
     previous_response_id: Option<String>,
     request_start_ms: Option<String>,
     warmup: bool,
@@ -185,7 +181,6 @@ pub struct ResponsesWebsocketConnection {
     idle_timeout: Duration,
     server_reasoning_included: bool,
     server_model: Option<String>,
-    telemetry: Option<Arc<dyn WebsocketTelemetry>>,
 }
 
 impl std::fmt::Debug for ResponsesWebsocketConnection {
@@ -195,7 +190,6 @@ impl std::fmt::Debug for ResponsesWebsocketConnection {
             .field("idle_timeout", &self.idle_timeout)
             .field("server_reasoning_included", &self.server_reasoning_included)
             .field("server_model", &self.server_model)
-            .field("telemetry", &self.telemetry.as_ref().map(|_| "<telemetry>"))
             .finish()
     }
 }
@@ -206,14 +200,12 @@ impl ResponsesWebsocketConnection {
         idle_timeout: Duration,
         server_reasoning_included: bool,
         server_model: Option<String>,
-        telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     ) -> Self {
         Self {
             stream: Arc::new(Mutex::new(Some(stream))),
             idle_timeout,
             server_reasoning_included,
             server_model,
-            telemetry,
         }
     }
 
@@ -239,7 +231,6 @@ impl ResponsesWebsocketConnection {
         let idle_timeout = self.idle_timeout;
         let server_reasoning_included = self.server_reasoning_included;
         let server_model = self.server_model.clone();
-        let telemetry = self.telemetry.clone();
         let ResponsesWsRequest::ResponseCreate(ws_request) = &request;
         let client_metadata = ws_request.client_metadata.as_ref();
         let timing_log_context = ResponsesWebsocketTimingLogContext {
@@ -252,11 +243,6 @@ impl ResponsesWebsocketConnection {
                 .cloned(),
             turn_id: client_metadata
                 .and_then(|metadata| metadata.get(TURN_ID_CLIENT_METADATA_KEY))
-                .cloned(),
-            traceparent: client_metadata
-                .and_then(|metadata| {
-                    metadata.get(WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY)
-                })
                 .cloned(),
             previous_response_id: ws_request.previous_response_id.clone(),
             request_start_ms: client_metadata
@@ -298,7 +284,6 @@ impl ResponsesWebsocketConnection {
                         tx_event.clone(),
                         request_text,
                         idle_timeout,
-                        telemetry,
                         turn_state.as_deref(),
                         &timing_log_context,
                     )
@@ -372,7 +357,6 @@ impl ResponsesWebsocketClient {
         extra_headers: HeaderMap,
         default_headers: HeaderMap,
         turn_state: Option<Arc<OnceLock<String>>>,
-        telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     ) -> Result<ResponsesWebsocketConnection, ApiError> {
         let ws_url = self
             .provider
@@ -390,7 +374,6 @@ impl ResponsesWebsocketClient {
             self.provider.stream_idle_timeout,
             server_reasoning_included,
             server_model,
-            telemetry,
         ))
     }
 
@@ -658,29 +641,17 @@ async fn run_websocket_response_stream(
     tx_event: mpsc::Sender<std::result::Result<ResponseEvent, ApiError>>,
     request_text: String,
     idle_timeout: Duration,
-    telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     turn_state: Option<&OnceLock<String>>,
     timing_log_context: &ResponsesWebsocketTimingLogContext,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
     let mut safety_buffering_treatment = SafetyBufferingTreatment::default();
-    send_websocket_request(
-        ws_stream,
-        request_text,
-        idle_timeout,
-        telemetry.as_ref(),
-        timing_log_context.connection_reused,
-    )
-    .await?;
+    send_websocket_request(ws_stream, request_text, idle_timeout).await?;
 
     loop {
-        let poll_start = Instant::now();
         let response = tokio::time::timeout(idle_timeout, ws_stream.next())
             .await
             .map_err(|_| ApiError::Stream("idle timeout waiting for websocket".into()));
-        if let Some(t) = telemetry.as_ref() {
-            t.on_ws_event(&response, poll_start.elapsed());
-        }
         let message = match response {
             Ok(Some(Ok(msg))) => msg,
             Ok(Some(Err(err))) => {
@@ -834,7 +805,6 @@ fn emit_responses_websocket_timing_event(
         session_id = context.session_id.as_deref().unwrap_or_default(),
         thread_id = context.thread_id.as_deref().unwrap_or_default(),
         turn_id = context.turn_id.as_deref().unwrap_or_default(),
-        traceparent = context.traceparent.as_deref().unwrap_or_default(),
         previous_response_id = context.previous_response_id.as_deref().unwrap_or_default(),
         request_start_ms = context.request_start_ms.as_deref().unwrap_or_default(),
         warmup = context.warmup,
@@ -861,11 +831,8 @@ async fn send_websocket_request(
     ws_stream: &WsStream,
     request_text: String,
     idle_timeout: Duration,
-    telemetry: Option<&Arc<dyn WebsocketTelemetry>>,
-    connection_reused: bool,
 ) -> Result<(), ApiError> {
-    let request_start = Instant::now();
-    let result = tokio::time::timeout(
+    tokio::time::timeout(
         idle_timeout,
         ws_stream.send(Message::Text(request_text.into())),
     )
@@ -873,17 +840,7 @@ async fn send_websocket_request(
     .map_err(|_| ApiError::Stream("idle timeout sending websocket request".into()))
     .and_then(|result| {
         result.map_err(|err| ApiError::Stream(format!("failed to send websocket request: {err}")))
-    });
-
-    if let Some(t) = telemetry.as_ref() {
-        t.on_ws_request(
-            request_start.elapsed(),
-            result.as_ref().err(),
-            connection_reused,
-        );
-    }
-
-    result?;
+    })?;
 
     Ok(())
 }
@@ -944,8 +901,8 @@ mod tests {
             prompt_cache_key: Some("cache-key".to_string()),
             text: None,
             client_metadata: Some(HashMap::from([(
-                "traceparent".to_string(),
-                "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01".to_string(),
+                "session_id".to_string(),
+                "session-1".to_string(),
             )])),
         };
         let request = ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest {

@@ -151,7 +151,6 @@ mod auth_keyring;
 pub mod edit;
 mod managed_features;
 mod network_proxy_spec;
-mod otel;
 mod permission_profile_catalog;
 mod permissions;
 mod requirements;
@@ -3704,9 +3703,28 @@ impl Config {
             .clone()
             .filter(|value| !value.is_empty());
 
+        // Codexium Patch: ensure the codexium config folder exists so providers
+        // declared in `codexium/models.json` are available before merging.
+        crate::codexium::ensure_default_files(codex_home.as_path())
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, format!("codexium init: {err}")))?;
+
         let model_providers =
             merge_configured_model_providers(built_in_model_providers(openai_base_url), cfg.model_providers)
                 .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;
+
+        // Codexium Patch: merge providers declared in `codexium/models.json`
+        // (base_url, env_key, wire_api, ...) so custom providers work without
+        // `[model_providers.X]` sections in config.toml.
+        let model_providers = merge_configured_model_providers(
+            model_providers,
+            crate::codexium::build_codexium_model_providers(codex_home.as_path()),
+        )
+        .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;
+
+        // Codexium Patch: inject any API keys from `codexium/auth.json` into the
+        // environment so the provider's `env_key` resolution picks them up.
+        let codexium_auth = crate::codexium::load_auth_file(codex_home.as_path());
+        crate::codexium::apply_auth_to_env(&codexium_auth, &model_providers);
 
         // Codexium Patch: when no `modelProvider` is given, infer it from the
         // model id prefix so custom providers (e.g. `kimi.kimi-k3` -> `kimi`) work
@@ -3939,7 +3957,20 @@ impl Config {
         let review_model = override_review_model.or(cfg.review_model);
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
-        let model_catalog = load_model_catalog(cfg.model_catalog_json.clone())?;
+        let model_catalog = {
+            let codexium_has_models = !crate::codexium::load_models_file(codex_home.as_path())
+                .providers
+                .is_empty();
+            if codexium_has_models {
+                // Codexium Patch: when custom per-provider models are declared in
+                // `codexium/models.json`, use a merged static catalog (bundled +
+                // codexium) so those models resolve with their configured metadata.
+                let catalog = load_model_catalog(cfg.model_catalog_json.clone())?;
+                Some(crate::codexium::build_model_catalog(codex_home.as_path(), catalog))
+            } else {
+                load_model_catalog(cfg.model_catalog_json.clone())?
+            }
+        };
 
         let log_dir = cfg
             .log_dir
@@ -4070,7 +4101,7 @@ impl Config {
             profile_workspace_roots,
         )
         .map_err(std::io::Error::from)?;
-        let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
+        let otel = resolve_otel_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
         let config = Self {
             model,
             service_tier,
@@ -4645,6 +4676,111 @@ pub fn find_codex_home() -> std::io::Result<AbsolutePathBuf> {
 /// that the directory exists.
 pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
     Ok(cfg.log_dir.clone())
+}
+
+fn resolve_otel_config(
+    config: codex_config::types::OtelConfigToml,
+    startup_warnings: &mut Vec<String>,
+) -> codex_config::types::OtelConfig {
+    use codex_config::types::DEFAULT_OTEL_ENVIRONMENT;
+    use codex_config::types::OtelConfig;
+    use codex_config::types::OtelExporterKind;
+
+    let log_user_prompt = config.log_user_prompt.unwrap_or(false);
+    let environment = config
+        .environment
+        .unwrap_or_else(|| DEFAULT_OTEL_ENVIRONMENT.to_string());
+    let exporter = config.exporter.unwrap_or(OtelExporterKind::None);
+    // OTLP HTTP endpoints are signal-specific in our config, so enabling log
+    // export must not implicitly send spans to a /v1/logs endpoint.
+    let trace_exporter = config.trace_exporter.unwrap_or(OtelExporterKind::None);
+    let metrics_exporter = config.metrics_exporter.unwrap_or(OtelExporterKind::Statsig);
+    let span_attributes = resolve_otel_span_attributes(config.span_attributes, startup_warnings);
+    let tracestate = resolve_otel_tracestate(config.tracestate, startup_warnings);
+
+    OtelConfig {
+        log_user_prompt,
+        environment,
+        exporter,
+        trace_exporter,
+        metrics_exporter,
+        span_attributes,
+        tracestate,
+    }
+}
+
+fn resolve_otel_span_attributes(
+    span_attributes: Option<BTreeMap<String, String>>,
+    startup_warnings: &mut Vec<String>,
+) -> BTreeMap<String, String> {
+    let Some(span_attributes) = span_attributes else {
+        return BTreeMap::new();
+    };
+
+    let mut valid_attributes = BTreeMap::new();
+    for (key, value) in span_attributes {
+        if key.trim().is_empty() {
+            push_invalid_otel_config_warning(
+                "otel.span_attributes",
+                "configured span attribute key must not be empty",
+                startup_warnings,
+            );
+            continue;
+        }
+        valid_attributes.insert(key, value);
+    }
+
+    valid_attributes
+}
+
+fn resolve_otel_tracestate(
+    tracestate: Option<BTreeMap<String, BTreeMap<String, String>>>,
+    startup_warnings: &mut Vec<String>,
+) -> BTreeMap<String, BTreeMap<String, String>> {
+    let Some(tracestate) = tracestate else {
+        return BTreeMap::new();
+    };
+
+    let mut valid_entries = BTreeMap::new();
+    for (member_key, fields) in tracestate {
+        let fields = resolve_otel_tracestate_member_fields(&member_key, fields, startup_warnings);
+        if fields.is_empty() {
+            continue;
+        }
+        valid_entries.insert(member_key, fields);
+    }
+
+    valid_entries
+}
+
+fn resolve_otel_tracestate_member_fields(
+    member_key: &str,
+    fields: BTreeMap<String, String>,
+    startup_warnings: &mut Vec<String>,
+) -> BTreeMap<String, String> {
+    let mut valid_fields = BTreeMap::new();
+    for (field_key, value) in fields {
+        if value.contains('\n') {
+            push_invalid_otel_config_warning(
+                "otel.tracestate",
+                format!("invalid configured tracestate value for {member_key}.{field_key}"),
+                startup_warnings,
+            );
+            continue;
+        }
+        valid_fields.insert(field_key, value);
+    }
+    valid_fields
+}
+
+fn push_invalid_otel_config_warning(
+    config_key: &str,
+    err: impl std::fmt::Display,
+    startup_warnings: &mut Vec<String>,
+) {
+    let message = format!("Ignoring invalid `{config_key}` config: {err}");
+    tracing::warn!("{message}");
+    startup_warnings.push(message);
 }
 
 #[cfg(test)]

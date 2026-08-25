@@ -74,13 +74,8 @@ pub(super) async fn spawn_review_thread(
         );
     }
 
-    let session_telemetry = parent_turn_context
-        .session_telemetry
-        .clone()
-        .with_model(model.as_str(), review_model_info.slug.as_str());
     let auth_manager_for_context = auth_manager.clone();
     let provider_for_context = provider.clone();
-    let session_telemetry_for_context = session_telemetry.clone();
     let reasoning_effort = per_turn_config.model_reasoning_effort.clone();
     let reasoning_summary = per_turn_config
         .model_reasoning_summary
@@ -133,13 +128,12 @@ pub(super) async fn spawn_review_thread(
 
     let review_turn_context = TurnContext {
         sub_id: review_turn_id.clone(),
-        trace_id: current_span_trace_id(),
+        trace_id: None,
         realtime_active: parent_turn_context.realtime_active,
         code_mode_available: parent_turn_context.code_mode_available,
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
-        session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
         reasoning_effort,
         reasoning_summary,

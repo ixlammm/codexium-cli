@@ -399,10 +399,6 @@ impl ChatWidget {
             self.maybe_restore_status_indicator_after_stream_idle();
             self.app_event_tx.send(AppEvent::StopCommitAnimation);
         }
-
-        if self.turn_lifecycle.agent_turn_running {
-            self.refresh_runtime_metrics();
-        }
     }
 
     pub(super) fn flush_interrupt_queue(&mut self) {
@@ -451,7 +447,7 @@ impl ChatWidget {
             // calls), render a separator before starting the next streamed assistant message.
             if self.transcript.needs_final_message_separator && self.transcript.had_work_activity {
                 self.add_to_history(history_cell::FinalMessageSeparator::new(
-                    /*elapsed_seconds*/ None, /*runtime_metrics*/ None,
+                    /*elapsed_seconds*/ None,
                 ));
                 self.transcript.needs_final_message_separator = false;
             } else if self.transcript.needs_final_message_separator {

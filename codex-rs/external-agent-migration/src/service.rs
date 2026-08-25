@@ -22,9 +22,6 @@ pub use crate::model::NamedMigration;
 pub use crate::model::PendingPluginImport;
 pub use crate::model::PluginImportOutcome;
 pub use crate::model::PluginsMigration;
-use crate::reporting::emit_migration_metric;
-#[cfg(test)]
-use crate::reporting::migration_metric_tags;
 pub use crate::reporting::record_import_error;
 use crate::scope::MigrationScope;
 use crate::sessions::ExternalAgentSessionMigration;
@@ -39,7 +36,6 @@ use crate::utils::invalid_data_error;
 use crate::utils::is_missing_or_empty_text_file;
 pub(super) use crate::utils::read_json_file as read_external_settings;
 use crate::utils::rewrite_external_agent_terms;
-use codex_analytics::AnalyticsEventsClient;
 use codex_core::config::Config;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
@@ -60,25 +56,18 @@ const EXTERNAL_AGENT_DIR: &str = crate::ClaSource::CONFIG_DIR;
 #[cfg(test)]
 const EXTERNAL_AGENT_CONFIG_MD: &str = crate::ClaSource::CONFIG_MD;
 
-const EXTERNAL_AGENT_CONFIG_IMPORT_METRIC: &str = "codex.external_agent_config.import";
-
 #[derive(Clone)]
 pub struct ExternalAgentConfigService {
     pub(super) codex_home: PathBuf,
     pub(super) connector_metadata_roots: Vec<PathBuf>,
     pub(crate) external_agent_home: PathBuf,
-    pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) source: ExternalAgentSource,
     pub(crate) session_import_limits: ExternalAgentSessionImportLimits,
     state_db: Option<StateDbHandle>,
 }
 
 impl ExternalAgentConfigService {
-    pub fn new(
-        codex_home: PathBuf,
-        analytics_events_client: AnalyticsEventsClient,
-        state_db: Option<StateDbHandle>,
-    ) -> Self {
+    pub fn new(codex_home: PathBuf, state_db: Option<StateDbHandle>) -> Self {
         let source = ExternalAgentSource::default();
         let external_agent_home = default_external_agent_home(source);
         let connector_metadata_roots = source.connector_metadata_roots(&external_agent_home);
@@ -86,7 +75,6 @@ impl ExternalAgentConfigService {
             codex_home,
             connector_metadata_roots,
             external_agent_home,
-            analytics_events_client: Some(analytics_events_client),
             source,
             session_import_limits: ExternalAgentSessionImportLimits::default(),
             state_db,
@@ -101,7 +89,6 @@ impl ExternalAgentConfigService {
             codex_home: self.codex_home.clone(),
             connector_metadata_roots,
             external_agent_home,
-            analytics_events_client: self.analytics_events_client.clone(),
             source,
             session_import_limits: self.session_import_limits,
             state_db: self.state_db.clone(),
@@ -156,7 +143,6 @@ impl ExternalAgentConfigService {
             codex_home,
             connector_metadata_roots,
             external_agent_home,
-            analytics_events_client: None,
             source,
             session_import_limits: ExternalAgentSessionImportLimits::default(),
             state_db: None,
@@ -201,20 +187,10 @@ impl ExternalAgentConfigService {
                     {
                         item_result.record_success(Some(source), Some(target), /*title*/ None);
                     }
-                    emit_migration_metric(
-                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
-                        ExternalAgentConfigMigrationItemType::Config,
-                        /*skills_count*/ None,
-                    );
                     Ok(())
                 })(),
                 ExternalAgentConfigMigrationItemType::Skills => (|| {
                     let imported_skills = self.import_skills(migration_item.cwd.as_deref())?;
-                    emit_migration_metric(
-                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
-                        ExternalAgentConfigMigrationItemType::Skills,
-                        Some(imported_skills.len()),
-                    );
                     for skill_name in imported_skills {
                         item_result.record_success(
                             Some(skill_name.clone()),
@@ -230,11 +206,6 @@ impl ExternalAgentConfigService {
                     {
                         item_result.record_success(Some(source), Some(target), /*title*/ None);
                     }
-                    emit_migration_metric(
-                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
-                        ExternalAgentConfigMigrationItemType::AgentsMd,
-                        /*skills_count*/ None,
-                    );
                     Ok(())
                 })(),
                 ExternalAgentConfigMigrationItemType::Plugins => {
@@ -307,11 +278,6 @@ impl ExternalAgentConfigService {
                                 details: remote_details,
                             });
                         }
-                        emit_migration_metric(
-                            EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
-                            ExternalAgentConfigMigrationItemType::Plugins,
-                            /*skills_count*/ None,
-                        );
                         Ok(())
                     }
                     .await
@@ -319,11 +285,6 @@ impl ExternalAgentConfigService {
                 ExternalAgentConfigMigrationItemType::McpServerConfig => (|| {
                     let migrated_server_names =
                         self.import_mcp_server_config(migration_item.cwd.as_deref())?;
-                    emit_migration_metric(
-                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
-                        ExternalAgentConfigMigrationItemType::McpServerConfig,
-                        /*skills_count*/ None,
-                    );
                     for server_name in migrated_server_names {
                         item_result.record_success(
                             Some(server_name.clone()),
@@ -336,11 +297,6 @@ impl ExternalAgentConfigService {
                 ExternalAgentConfigMigrationItemType::Subagents => (|| {
                     let imported_subagents =
                         self.import_subagents(migration_item.cwd.as_deref())?;
-                    emit_migration_metric(
-                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
-                        ExternalAgentConfigMigrationItemType::Subagents,
-                        Some(imported_subagents.len()),
-                    );
                     for subagent_name in imported_subagents {
                         item_result.record_success(
                             Some(subagent_name.clone()),
@@ -352,11 +308,6 @@ impl ExternalAgentConfigService {
                 })(),
                 ExternalAgentConfigMigrationItemType::Hooks => (|| {
                     let migrated_hook_names = self.import_hooks(migration_item.cwd.as_deref())?;
-                    emit_migration_metric(
-                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
-                        ExternalAgentConfigMigrationItemType::Hooks,
-                        /*skills_count*/ None,
-                    );
                     for hook_name in migrated_hook_names {
                         item_result.record_success(
                             Some(hook_name.clone()),
@@ -368,11 +319,6 @@ impl ExternalAgentConfigService {
                 })(),
                 ExternalAgentConfigMigrationItemType::Commands => (|| {
                     let imported_commands = self.import_commands(migration_item.cwd.as_deref())?;
-                    emit_migration_metric(
-                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
-                        ExternalAgentConfigMigrationItemType::Commands,
-                        Some(imported_commands.len()),
-                    );
                     for command_name in imported_commands {
                         item_result.record_success(
                             Some(command_name.clone()),
@@ -396,11 +342,6 @@ impl ExternalAgentConfigService {
                             selected_memory,
                         )
                         .await?;
-                        emit_migration_metric(
-                            EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
-                            ExternalAgentConfigMigrationItemType::Memory,
-                            /*skills_count*/ None,
-                        );
                         let target_path = memory_import::resources_root(&self.codex_home);
                         for project_key in memory_outcome.synchronized_projects {
                             item_result.record_success(

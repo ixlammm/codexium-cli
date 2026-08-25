@@ -95,7 +95,6 @@ async fn start_recording_app_server_with_history(
         codex_config::LoaderOverrides::default(),
         /*strict_config*/ false,
         codex_config::CloudConfigBundleLoader::default(),
-        codex_feedback::CodexFeedback::new(),
         /*log_db*/ None,
         state_db,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),

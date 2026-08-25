@@ -984,7 +984,7 @@ mod tests {
         .map_err(anyhow::Error::from)?;
         let environment_task = tokio::spawn(run_multiplexed_environment(
             client_websocket,
-            ConnectionProcessor::new(runtime_paths),
+            ConnectionProcessor::new_for_tests(runtime_paths),
             "test-environment".to_string(),
             "test-registration".to_string(),
             NoiseChannelIdentity::generate()?,

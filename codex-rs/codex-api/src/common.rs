@@ -7,7 +7,6 @@ use codex_protocol::protocol::ModelVerification;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnModerationMetadataEvent;
-use codex_protocol::protocol::W3cTraceContext;
 use futures::Stream;
 use serde::Deserialize;
 use serde::Serialize;
@@ -19,9 +18,6 @@ use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
-
-pub const WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY: &str = "ws_request_header_traceparent";
-pub const WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY: &str = "ws_request_header_tracestate";
 
 /// Canonical input payload for the compaction endpoint.
 #[derive(Debug, Clone, Serialize)]
@@ -181,7 +177,7 @@ pub struct TextFormat {
     pub strict: bool,
     /// JSON schema for the desired output.
     pub schema: Value,
-    /// Friendly name for the format, used in telemetry/debugging.
+    /// Friendly name for the format, used in debugging.
     pub name: String,
 }
 
@@ -272,6 +268,9 @@ pub struct ResponsesApiRequest {
     pub text: Option<TextControls>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_metadata: Option<HashMap<String, String>>,
+    /// Codexium Patch: maximum number of output tokens for the response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<i64>,
 }
 
 impl<'a> From<&'a ResponsesApiRequest> for ResponseCreateWsRequest<'a> {
@@ -294,6 +293,7 @@ impl<'a> From<&'a ResponsesApiRequest> for ResponseCreateWsRequest<'a> {
             text: request.text.as_ref(),
             generate: None,
             client_metadata: request.client_metadata.clone(),
+            max_output_tokens: request.max_output_tokens,
         }
     }
 }
@@ -326,26 +326,15 @@ pub struct ResponseCreateWsRequest<'a> {
     pub generate: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_metadata: Option<HashMap<String, String>>,
+    /// Codexium Patch: maximum number of output tokens for the response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<i64>,
 }
 
 pub fn response_create_client_metadata(
     client_metadata: Option<HashMap<String, String>>,
-    trace: Option<&W3cTraceContext>,
 ) -> Option<HashMap<String, String>> {
-    let mut client_metadata = client_metadata.unwrap_or_default();
-
-    if let Some(traceparent) = trace.and_then(|trace| trace.traceparent.as_deref()) {
-        client_metadata.insert(
-            WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY.to_string(),
-            traceparent.to_string(),
-        );
-    }
-    if let Some(tracestate) = trace.and_then(|trace| trace.tracestate.as_deref()) {
-        client_metadata.insert(
-            WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY.to_string(),
-            tracestate.to_string(),
-        );
-    }
+    let client_metadata = client_metadata.unwrap_or_default();
 
     (!client_metadata.is_empty()).then_some(client_metadata)
 }

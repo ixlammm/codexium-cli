@@ -13,12 +13,10 @@ doctest = false
 workspace = true
 
 [dependencies]
-codex-analytics = { workspace = true }
 codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-mcp = { workspace = true }
-codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-skills = { workspace = true }
 codex-tools = { workspace = true }
@@ -42,7 +40,6 @@ codex-models-manager = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 dunce = { workspace = true }
 insta = { workspace = true }
-opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

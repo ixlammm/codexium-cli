@@ -46,11 +46,6 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use chrono::Local;
 use chrono::Utc;
-use codex_analytics::AnalyticsEventsClient;
-use codex_analytics::ImagePreparationFact;
-use codex_analytics::ImagePreparationMetadata;
-use codex_analytics::SubAgentThreadStartedInput;
-use codex_analytics::TurnCodexErrorFact;
 use codex_async_utils::OrCancelExt;
 use codex_connectors::connector_runtime_context_key;
 use codex_exec_server::Environment;
@@ -69,7 +64,6 @@ use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_mcp::McpResourceClient;
 use codex_mcp::McpRuntime;
 use codex_mcp::McpRuntimeContext;
@@ -79,10 +73,6 @@ use codex_models_manager::manager::SharedModelsManager;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_network_proxy::normalize_host;
-use codex_otel::current_span_trace_id;
-use codex_otel::current_span_w3c_trace_context;
-use codex_otel::set_parent_from_w3c_trace_context;
-use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
@@ -188,7 +178,6 @@ use crate::config::PermissionProfileState;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
-use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerSource;
 use codex_config::types::McpServerConfig;
@@ -233,7 +222,6 @@ pub(crate) use self::input_queue::InputQueueActivity;
 pub(crate) use self::input_queue::TurnInput;
 pub(crate) use self::input_queue::TurnInputQueue;
 use self::review::spawn_review_thread;
-use self::session::AppServerClientMetadata;
 use self::session::Session;
 use self::session::SessionConfiguration;
 pub(crate) use self::session::SessionSettingsUpdate;
@@ -287,21 +275,15 @@ use crate::tools::network_approval::build_network_policy_decider;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::turn_timing::TurnTimingState;
-use crate::turn_timing::record_turn_ttfm_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::RecommendedPluginCandidatesInput;
-use codex_git_utils::get_git_repo_root;
 use codex_history::CompactedItem;
 use codex_history::InitialHistory;
 use codex_history::ResponseItemEnvelope;
 use codex_mcp::McpConfig;
-use codex_mcp::effective_mcp_servers;
-use codex_otel::SessionTelemetry;
-use codex_otel::THREAD_STARTED_METRIC;
-use codex_otel::TelemetryAuthMode;
 use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -406,7 +388,6 @@ pub(crate) struct SessionSpawnArgs {
     pub(crate) originator: String,
     pub(crate) agent_control: AgentControl,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
-    pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
     pub(crate) inherited_environments: Option<TurnEnvironmentSnapshot>,
     /// Parent rollout trace used only to derive fresh spawned child traces.
@@ -415,11 +396,9 @@ pub(crate) struct SessionSpawnArgs {
     /// `Session::new` creates the root trace itself when rollout tracing is enabled.
     pub(crate) parent_rollout_thread_trace: ThreadTraceContext,
     pub(crate) user_shell_override: Option<shell::Shell>,
-    pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) environment_selections: Vec<TurnEnvironmentSelection>,
     pub(crate) thread_extension_init: ExtensionDataInit,
     pub(crate) client_mcp_extensions: ClientMcpExtensions,
-    pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     pub(crate) external_time_provider: Option<Arc<dyn TimeProvider>>,
@@ -455,27 +434,10 @@ const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyb
 impl Session {
     /// Spawn and initialize a new session.
     pub(crate) async fn spawn(args: SessionSpawnArgs) -> CodexResult<(Arc<Self>, SessionIo)> {
-        let parent_trace = match args.parent_trace {
-            Some(trace) => {
-                if codex_otel::context_from_w3c_trace_context(&trace).is_some() {
-                    Some(trace)
-                } else {
-                    warn!("ignoring invalid thread spawn trace carrier");
-                    None
-                }
-            }
-            None => None,
-        };
         let thread_spawn_span = info_span!("thread_spawn", otel.name = "thread_spawn");
-        if let Some(trace) = parent_trace.as_ref() {
-            let _ = set_parent_from_w3c_trace_context(&thread_spawn_span, trace);
-        }
-        Self::spawn_internal(SessionSpawnArgs {
-            parent_trace,
-            ..args
-        })
-        .instrument(thread_spawn_span)
-        .await
+        Self::spawn_internal(args)
+            .instrument(thread_spawn_span)
+            .await
     }
 
     async fn spawn_internal(args: SessionSpawnArgs) -> CodexResult<(Arc<Self>, SessionIo)> {
@@ -502,16 +464,13 @@ impl Session {
             originator,
             agent_control,
             dynamic_tools,
-            metrics_service_name,
             user_shell_override,
             inherited_exec_policy,
             inherited_environments,
             parent_rollout_thread_trace,
-            parent_trace: _,
             environment_selections,
             thread_extension_init,
             client_mcp_extensions,
-            analytics_events_client,
             thread_store,
             attestation_provider,
             external_time_provider,
@@ -703,7 +662,6 @@ impl Session {
             codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
-            metrics_service_name,
             app_server_client_name: None,
             app_server_client_version: None,
             trusted_guardian_reviewer,
@@ -748,7 +706,6 @@ impl Session {
             agent_control,
             environment_manager,
             inherited_environments,
-            analytics_events_client,
             thread_store,
             parent_rollout_thread_trace,
             attestation_provider,
@@ -819,10 +776,7 @@ impl SessionIo {
     }
 
     /// Use sparingly: prefer `submit()` so submission IDs are generated consistently.
-    pub(crate) async fn submit_with_id(&self, mut sub: Submission) -> CodexResult<()> {
-        if sub.trace.is_none() {
-            sub.trace = current_span_w3c_trace_context();
-        }
+    pub(crate) async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
         self.tx_sub
             .send(sub)
             .await
@@ -836,12 +790,11 @@ impl SessionIo {
     /// session loop exits before replying, the caller gets `InternalAgentDied`.
     pub(crate) async fn submit_turn_input(
         &self,
-        mut request: TurnInputRequest,
+        request: TurnInputRequest,
         mode: TurnInputMode,
     ) -> CodexResult<TurnInputSubmission> {
         let id = new_submission_id();
         let (reply_tx, reply_rx) = oneshot::channel();
-        let trace = request.trace.take();
         self.submit_with_id(Submission {
             id,
             op: Op::TurnInput {
@@ -849,7 +802,7 @@ impl SessionIo {
                 mode,
                 reply: reply_tx,
             },
-            trace,
+            trace: None,
             parent_turn_id: None,
             root_turn_id: None,
         })
@@ -1012,17 +965,6 @@ fn push_prompt_fragment(
 }
 
 impl Session {
-    pub(crate) async fn app_server_client_metadata(&self) -> AppServerClientMetadata {
-        let state = self.state.lock().await;
-        AppServerClientMetadata {
-            client_name: state.session_configuration.app_server_client_name.clone(),
-            client_version: state
-                .session_configuration
-                .app_server_client_version
-                .clone(),
-        }
-    }
-
     fn managed_network_proxy_active_for_permission_profile(
         permission_profile: &PermissionProfile,
     ) -> bool {
@@ -1248,13 +1190,6 @@ impl Session {
         state.auto_compact_window_snapshot()
     }
 
-    pub(crate) async fn estimated_tokens_after_last_model_generated_item(&self) -> i64 {
-        let state = self.state.lock().await;
-        state
-            .history
-            .estimated_tokens_after_last_model_generated_item()
-    }
-
     pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {
         let state = self.state.lock().await;
         state.token_info().map(|info| info.total_token_usage)
@@ -1301,12 +1236,6 @@ impl Session {
         state.merge_connector_selection(connector_ids)
     }
 
-    // Returns the connector IDs currently selected for this session.
-    pub(crate) async fn get_connector_selection(&self) -> HashSet<String> {
-        let state = self.state.lock().await;
-        state.get_connector_selection()
-    }
-
     // Clears connector IDs that were accumulated for explicit selection.
     pub(crate) async fn clear_connector_selection(&self) {
         let mut state = self.state.lock().await;
@@ -1328,11 +1257,6 @@ impl Session {
                 ),
             )
         };
-        let has_prior_user_turns = initial_history_has_prior_user_turns(&conversation_history);
-        {
-            let mut state = self.state.lock().await;
-            state.set_next_turn_is_first(!has_prior_user_turns);
-        }
         match conversation_history {
             InitialHistory::New | InitialHistory::Cleared => {
                 // Defer initial context insertion until the first real turn starts so
@@ -1868,17 +1792,6 @@ impl Session {
         self.refresh_runtime_config(next_config).await;
     }
 
-    /// Record a terminal CodexErr before the app-server completion notification is reduced.
-    pub(crate) fn track_turn_codex_error(&self, turn_context: &TurnContext, error: &CodexErr) {
-        self.services
-            .analytics_events_client
-            .track_turn_codex_error(TurnCodexErrorFact::from_codex_err(
-                self.thread_id.to_string(),
-                turn_context.sub_id.clone(),
-                error,
-            ));
-    }
-
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
@@ -2159,7 +2072,6 @@ impl Session {
         turn_context: &TurnContext,
         item: TurnItem,
     ) {
-        record_turn_ttfm_metric(turn_context, &item).await;
         let completed_at_ms = now_unix_timestamp_ms();
         let item_id = item.id();
         let started_at_ms = turn_context
@@ -2534,8 +2446,6 @@ impl Session {
                 /*retry_reason*/ None,
                 GuardianReviewOptions {
                     plugin_attribution_override: None,
-                    approval_request_source:
-                        codex_analytics::GuardianApprovalRequestSource::MainTurn,
                     external_cancel: Some(cancellation_token.clone()),
                 },
             );
@@ -2937,7 +2847,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         items: &'a [ResponseItem],
-    ) -> (Cow<'a, [ResponseItem]>, Vec<ImagePreparationMetadata>) {
+    ) -> Cow<'a, [ResponseItem]> {
         let mut items = items.to_vec();
         let image_preparation_mode = if unified_image_budget_enabled(
             &turn_context.config.features,
@@ -2956,7 +2866,7 @@ impl Session {
         } else {
             ImageResizeNoticeMode::Disabled
         };
-        let image_preparations = prepare_image_response_items(
+        let _ = prepare_image_response_items(
             &mut items,
             image_preparation_mode,
             image_resize_notice_mode,
@@ -2966,11 +2876,7 @@ impl Session {
         for item in &mut items {
             Self::stamp_response_item_for_history(item, &turn_context.sub_id);
         }
-        let items = Cow::Owned(items);
-        (
-            Self::assign_missing_response_item_ids(items),
-            image_preparations,
-        )
+        Self::assign_missing_response_item_ids(Cow::Owned(items))
     }
 
     fn assign_missing_response_item_ids(items: Cow<'_, [ResponseItem]>) -> Cow<'_, [ResponseItem]> {
@@ -3018,14 +2924,13 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        let (items, image_preparations) =
-            self.prepare_conversation_items_for_history(turn_context, items);
+        let items = self.prepare_conversation_items_for_history(turn_context, items);
         let items = items
             .into_owned()
             .into_iter()
             .map(ResponseItemEnvelope::new)
             .collect();
-        self.record_prepared_conversation_items(turn_context, items, image_preparations)
+        self.record_prepared_conversation_items(turn_context, items)
             .await;
     }
 
@@ -3033,7 +2938,6 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         items: Vec<ResponseItemEnvelope>,
-        image_preparations: Vec<ImagePreparationMetadata>,
     ) {
         let response_items = items
             .iter()
@@ -3047,14 +2951,6 @@ impl Session {
             state
                 .history
                 .record_annotated_items(&items, turn_context.model_info.truncation_policy.into());
-        }
-        for image in image_preparations {
-            self.services
-                .analytics_events_client
-                .track_image_preparation(ImagePreparationFact {
-                    turn_id: turn_context.sub_id.clone(),
-                    metadata: image,
-                });
         }
         let rollout_items: Vec<RolloutItem> =
             items.into_iter().map(RolloutItem::ResponseItem).collect();
@@ -3209,7 +3105,7 @@ impl Session {
         communication: InterAgentCommunication,
     ) {
         let response_item = communication.to_model_input_item();
-        let (items, _) = self.prepare_conversation_items_for_history(
+        let items = self.prepare_conversation_items_for_history(
             turn_context,
             std::slice::from_ref(&response_item),
         );
@@ -4071,44 +3967,6 @@ impl Session {
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
     }
-}
-
-pub(crate) fn emit_subagent_session_started(
-    analytics_events_client: &AnalyticsEventsClient,
-    client_metadata: AppServerClientMetadata,
-    session_id: SessionId,
-    thread_id: ThreadId,
-    parent_thread_id: Option<ThreadId>,
-    thread_config: ThreadConfigSnapshot,
-    subagent_source: SubAgentSource,
-) {
-    let AppServerClientMetadata {
-        client_name,
-        client_version,
-    } = client_metadata;
-    let (Some(client_name), Some(client_version)) = (client_name, client_version) else {
-        tracing::warn!("skipping subagent thread analytics: missing inherited client metadata");
-        return;
-    };
-    let created_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    analytics_events_client.track_subagent_thread_started(SubAgentThreadStartedInput {
-        session_id: session_id.to_string(),
-        thread_id: thread_id.to_string(),
-        parent_thread_id: parent_thread_id.map(|thread_id| thread_id.to_string()),
-        forked_from_thread_id: thread_config
-            .forked_from_thread_id
-            .map(|thread_id| thread_id.to_string()),
-        product_client_id: thread_config.originator.clone(),
-        client_name,
-        client_version,
-        model: thread_config.model,
-        ephemeral: thread_config.ephemeral,
-        subagent_source,
-        created_at,
-    });
 }
 
 /// Builds hook configuration for one config snapshot, including any enabled plugin hooks.

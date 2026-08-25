@@ -19,7 +19,6 @@ mod rollout_file_name;
 mod rollout_reference_index;
 pub(crate) mod search;
 pub(crate) mod session_index;
-mod sqlite_metrics;
 pub mod state_db;
 
 pub use codex_history::CompactedItem;
@@ -82,8 +81,6 @@ pub use metadata::builder_from_items;
 pub use metadata::rollout_id_from_path;
 pub use model_context::ModelContextScan;
 pub use model_context::ModelContextScanProgress;
-pub use persistence_metrics::RolloutPersistenceBatchMeasurement;
-pub use persistence_metrics::RolloutPersistenceTelemetry;
 pub use persistence_metrics::measure_and_filter_rollout_items;
 pub use policy::is_persisted_rollout_item;
 pub use policy::persisted_rollout_items;
@@ -104,7 +101,6 @@ pub use session_index::find_thread_name_by_id;
 pub use session_index::find_thread_names_by_ids;
 pub use session_index::remove_thread_name_entries;
 pub use state_db::StateDbHandle;
-pub use state_db::sqlite_telemetry_recorder;
 
 #[cfg(test)]
 mod tests;

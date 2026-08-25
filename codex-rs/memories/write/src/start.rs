@@ -1,7 +1,6 @@
 use crate::extensions::seed_extension_instructions;
 use crate::guard;
 use crate::memory_root;
-use crate::metrics::MEMORY_STARTUP;
 use crate::phase1;
 use crate::phase2;
 use crate::runtime::MemoryStartupContext;
@@ -65,11 +64,6 @@ pub fn start_memories_startup_task(
         phase1::prune(context.as_ref(), &config).await;
 
         if !guard::rate_limits_ok(&auth_manager, &config).await {
-            context.counter(
-                MEMORY_STARTUP,
-                /*inc*/ 1,
-                &[("status", "skipped_rate_limit")],
-            );
             return;
         }
 

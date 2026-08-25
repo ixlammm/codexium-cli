@@ -647,14 +647,3 @@ async fn import_continues_after_failed_migration_item() {
         "Codex guidance"
     );
 }
-
-#[test]
-fn migration_metric_tags_for_skills_include_skills_count() {
-    assert_eq!(
-        migration_metric_tags(ExternalAgentConfigMigrationItemType::Skills, Some(3)),
-        vec![
-            ("migration_type", "skills".to_string()),
-            ("skills_count", "3".to_string()),
-        ]
-    );
-}

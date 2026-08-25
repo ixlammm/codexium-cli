@@ -1,8 +1,4 @@
 use crate::build_stage_one_input_message;
-use crate::metrics::MEMORY_PHASE_ONE_E2E_MS;
-use crate::metrics::MEMORY_PHASE_ONE_JOBS;
-use crate::metrics::MEMORY_PHASE_ONE_OUTPUT;
-use crate::metrics::MEMORY_PHASE_ONE_TOKEN_USAGE;
 use crate::runtime::MemoryStartupContext;
 use crate::runtime::StageOneRequestContext;
 use codex_config::types::MemoriesConfig;
@@ -69,7 +65,6 @@ struct StageOneOutput {
 /// 4) emit metrics and logs
 pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
     let stage_one_context = build_request_context(context.as_ref(), config.as_ref()).await;
-    let _phase_one_e2e_timer = stage_one_context.start_timer(MEMORY_PHASE_ONE_E2E_MS);
 
     // 1. Claim startup job.
     let Some(claimed_candidates) = claim_startup_jobs(context.as_ref(), &config.memories).await
@@ -77,11 +72,6 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
         return;
     };
     if claimed_candidates.is_empty() {
-        stage_one_context.counter(
-            MEMORY_PHASE_ONE_JOBS,
-            /*inc*/ 1,
-            &[("status", "skipped_no_candidates")],
-        );
         return;
     }
 
@@ -96,7 +86,6 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
 
     // 4. Metrics and logs.
     let counts = aggregate_stats(outcomes);
-    emit_metrics(&stage_one_context, &counts);
     info!(
         "memory stage-1 extraction complete: {} job(s) claimed, {} succeeded ({} with output, {} no output), {} failed",
         counts.claimed,
@@ -596,74 +585,6 @@ fn aggregate_stats(outcomes: Vec<JobResult>) -> Stats {
         succeeded_no_output,
         failed,
         total_token_usage: has_token_usage.then_some(total_token_usage),
-    }
-}
-
-fn emit_metrics(context: &StageOneRequestContext, counts: &Stats) {
-    if counts.claimed > 0 {
-        context.counter(
-            MEMORY_PHASE_ONE_JOBS,
-            counts.claimed as i64,
-            &[("status", "claimed")],
-        );
-    }
-    if counts.succeeded_with_output > 0 {
-        context.counter(
-            MEMORY_PHASE_ONE_JOBS,
-            counts.succeeded_with_output as i64,
-            &[("status", "succeeded")],
-        );
-        context.counter(
-            MEMORY_PHASE_ONE_OUTPUT,
-            counts.succeeded_with_output as i64,
-            &[],
-        );
-    }
-    if counts.succeeded_no_output > 0 {
-        context.counter(
-            MEMORY_PHASE_ONE_JOBS,
-            counts.succeeded_no_output as i64,
-            &[("status", "succeeded_no_output")],
-        );
-    }
-    if counts.failed > 0 {
-        context.counter(
-            MEMORY_PHASE_ONE_JOBS,
-            counts.failed as i64,
-            &[("status", "failed")],
-        );
-    }
-    if let Some(token_usage) = counts.total_token_usage.as_ref() {
-        context.histogram(
-            MEMORY_PHASE_ONE_TOKEN_USAGE,
-            token_usage.total_tokens.max(0),
-            &[("token_type", "total")],
-        );
-        context.histogram(
-            MEMORY_PHASE_ONE_TOKEN_USAGE,
-            token_usage.input_tokens.max(0),
-            &[("token_type", "input")],
-        );
-        context.histogram(
-            MEMORY_PHASE_ONE_TOKEN_USAGE,
-            token_usage.cached_input(),
-            &[("token_type", "cached_input")],
-        );
-        context.histogram(
-            MEMORY_PHASE_ONE_TOKEN_USAGE,
-            token_usage.cache_write_input_tokens.max(0),
-            &[("token_type", "cache_write_input")],
-        );
-        context.histogram(
-            MEMORY_PHASE_ONE_TOKEN_USAGE,
-            token_usage.output_tokens.max(0),
-            &[("token_type", "output")],
-        );
-        context.histogram(
-            MEMORY_PHASE_ONE_TOKEN_USAGE,
-            token_usage.reasoning_output_tokens.max(0),
-            &[("token_type", "reasoning_output")],
-        );
     }
 }
 

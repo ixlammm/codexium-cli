@@ -36,5 +36,6 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             runtime_paths,
             // This test-only fixture has no application configuration to resolve HTTP policy.
             HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            codex_exec_server::RequestDispatchMode::Inline,
         ))
 }

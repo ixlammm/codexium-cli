@@ -20,7 +20,6 @@ use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_agent_graph_store::AgentGraphStore;
 use codex_agent_graph_store::LocalAgentGraphStore;
-use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
 use codex_code_mode::CodeModeSessionProvider;
@@ -347,7 +346,6 @@ pub(crate) struct ThreadManagerState {
     external_time_provider: Option<Arc<dyn TimeProvider>>,
     session_source: SessionSource,
     installation_id: String,
-    analytics_events_client: Option<AnalyticsEventsClient>,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
 }
@@ -420,7 +418,6 @@ impl ThreadManager {
         environment_manager: Arc<EnvironmentManager>,
         extensions: Arc<ExtensionRegistry<Config>>,
         user_instructions_provider: Arc<dyn UserInstructionsProvider>,
-        analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         agent_graph_store: Option<Arc<dyn AgentGraphStore>>,
         installation_id: String,
@@ -475,7 +472,6 @@ impl ThreadManager {
                 auth_manager,
                 session_source,
                 installation_id,
-                analytics_events_client,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -624,7 +620,6 @@ impl ThreadManager {
                 auth_manager,
                 session_source: SessionSource::Exec,
                 installation_id,
-                analytics_events_client: None,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -1700,7 +1695,7 @@ impl ThreadManagerState {
             thread_source,
             dynamic_tools,
             metrics_service_name,
-            parent_trace,
+            parent_trace: _,
             environments,
             thread_extension_init,
             client_mcp_extensions,
@@ -1791,16 +1786,13 @@ impl ThreadManagerState {
             originator,
             agent_control,
             dynamic_tools,
-            metrics_service_name,
             inherited_environments,
             inherited_exec_policy,
             parent_rollout_thread_trace,
             user_shell_override,
-            parent_trace,
             environment_selections: environments,
             thread_extension_init,
             client_mcp_extensions,
-            analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),
             external_time_provider: self.external_time_provider.clone(),

@@ -1,4 +1,4 @@
-use anyhow::Result;
+﻿use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_fake_paginated_rollout;
@@ -53,7 +53,6 @@ use codex_config::LoaderOverrides;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
-use codex_feedback::CodexFeedback;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::TurnItem as CoreTurnItem;
@@ -544,7 +543,7 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
                     CoreTurnItem::AgentMessage(AgentMessageItem {
                         id: "final-1".to_string(),
                         content: vec![AgentMessageContent::Text {
-                            text: "😀 **Final**  \nneedle".to_string(),
+                            text: "ðŸ˜€ **Final**  \nneedle".to_string(),
                         }],
                         phase: Some(MessagePhase::FinalAnswer),
                         memory_citation: None,
@@ -623,7 +622,7 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
             .collect::<Vec<_>>(),
         vec!["turn-1", "turn-1", "turn-1"]
     );
-    assert_eq!(data[2].snippet, "😀 Final needle");
+    assert_eq!(data[2].snippet, "ðŸ˜€ Final needle");
     assert_eq!(data[2].snippet_match_range.start, 9);
     assert_eq!(data[2].snippet_match_range.end, 15);
     assert_eq!(next_cursor, None);
@@ -729,7 +728,6 @@ async fn thread_turns_list_reads_store_history_without_rollout_path() -> Result<
         strict_config: false,
         cloud_config_bundle: CloudConfigBundleLoader::default(),
         thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
-        feedback: CodexFeedback::new(),
         log_db: None,
         state_db: None,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
@@ -799,7 +797,6 @@ async fn thread_read_loaded_include_turns_reads_store_history_without_rollout_pa
         strict_config: false,
         cloud_config_bundle: CloudConfigBundleLoader::default(),
         thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
-        feedback: CodexFeedback::new(),
         log_db: None,
         state_db: None,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
@@ -907,7 +904,6 @@ async fn thread_list_includes_store_thread_without_rollout_path() -> Result<()> 
         strict_config: false,
         cloud_config_bundle: CloudConfigBundleLoader::default(),
         thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
-        feedback: CodexFeedback::new(),
         log_db: None,
         state_db: None,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),

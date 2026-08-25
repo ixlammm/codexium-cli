@@ -20,7 +20,6 @@ use crate::exec_env::inject_apply_patch_env;
 use crate::exec_env::inject_permission_profile_env;
 use crate::exec_env::inject_session_id_env;
 use crate::exec_policy::ExecApprovalRequest;
-use crate::plugins::metrics::finish_and_track_measurements;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::ExecServerEnvConfig;
@@ -60,11 +59,7 @@ use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
-use crate::unified_exec::take_plugin_metrics_sidecar;
-use codex_core_plugins::PLUGIN_METRICS_OUTPUT_ENV_VAR;
 use codex_core_plugins::PluginCommandAttribution;
-use codex_core_plugins::PluginMetricsSidecar;
-use codex_core_plugins::strip_output_env;
 use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
@@ -133,14 +128,12 @@ fn exec_env_policy_from_shell_policy(
     exclude.extend([
         CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
         codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.to_string(),
-        PLUGIN_METRICS_OUTPUT_ENV_VAR.to_string(),
     ]);
     let mut r#set = policy.r#set.clone();
     r#set.retain(|key, _| {
         ![
             CODEX_PERMISSION_PROFILE_ENV_VAR,
             codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR,
-            PLUGIN_METRICS_OUTPUT_ENV_VAR,
         ]
         .iter()
         .any(|runtime_key| key.eq_ignore_ascii_case(runtime_key))
@@ -247,20 +240,6 @@ struct PreparedProcessHandles {
 
 struct InitialExecCommandGuard {
     active: Option<Arc<AtomicBool>>,
-    metrics_sidecar: Option<PluginMetricsSidecar>,
-}
-
-impl InitialExecCommandGuard {
-    async fn finish_plugin_metrics(&mut self, context: &UnifiedExecContext, exit_code: i32) {
-        finish_and_track_measurements(
-            self.metrics_sidecar.take(),
-            exit_code,
-            &context.session,
-            &context.step_context.turn,
-            &context.call_id,
-        )
-        .await;
-    }
 }
 
 impl Drop for InitialExecCommandGuard {
@@ -473,10 +452,7 @@ impl UnifiedExecProcessManager {
                 return Err(err);
             }
         };
-        let UnifiedExecAttempt {
-            process,
-            metrics_sidecar,
-        } = attempt;
+        let UnifiedExecAttempt { process } = attempt;
         let process = Arc::new(process);
         let network_denial_monitor = deferred_network_approval.as_ref().map(|deferred| {
             terminate_process_on_network_denial(
@@ -526,7 +502,7 @@ impl UnifiedExecProcessManager {
         // Persist live sessions before the initial yield wait so interrupting the
         // turn cannot drop the last Arc and terminate the background process.
         let process_started_alive = !process.has_exited() && process.exit_code().is_none();
-        let mut initial_exec_command_guard = if process_started_alive {
+        let _initial_exec_command_guard = if process_started_alive {
             let initial_exec_command_active = Arc::new(AtomicBool::new(true));
             self.store_process(
                 Arc::clone(&process),
@@ -540,20 +516,15 @@ impl UnifiedExecProcessManager {
                 request.tty,
                 deferred_network_approval.clone(),
                 network_denial_monitor,
-                metrics_sidecar,
                 Arc::clone(&transcript),
                 Arc::clone(&initial_exec_command_active),
             )
             .await;
             InitialExecCommandGuard {
                 active: Some(initial_exec_command_active),
-                metrics_sidecar: None,
             }
         } else {
-            InitialExecCommandGuard {
-                active: None,
-                metrics_sidecar,
-            }
+            InitialExecCommandGuard { active: None }
         };
 
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
@@ -652,18 +623,6 @@ impl UnifiedExecProcessManager {
                                 output_omitted_bytes,
                             )
                         })?;
-                    let metrics_sidecar = entry
-                        .plugin_metrics_sidecar
-                        .as_ref()
-                        .and_then(take_plugin_metrics_sidecar);
-                    finish_and_track_measurements(
-                        metrics_sidecar,
-                        exit_code.unwrap_or(-1),
-                        &context.session,
-                        &context.step_context.turn,
-                        &context.call_id,
-                    )
-                    .await;
                     (None, exit_code)
                 }
                 ProcessStatus::Unknown => {
@@ -696,9 +655,6 @@ impl UnifiedExecProcessManager {
             }
             let exit_code = process.exit_code();
             let exit = exit_code.unwrap_or(-1);
-            initial_exec_command_guard
-                .finish_plugin_metrics(context, exit)
-                .await;
             emit_exec_end_for_unified_exec(
                 Arc::clone(&context.session),
                 Arc::clone(&context.step_context.turn),
@@ -1000,15 +956,11 @@ impl UnifiedExecProcessManager {
         tty: bool,
         network_approval: Option<DeferredNetworkApproval>,
         network_denial_monitor: Option<tokio::task::JoinHandle<()>>,
-        metrics_sidecar: Option<PluginMetricsSidecar>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
         initial_exec_command_active: Arc<AtomicBool>,
     ) {
-        let plugin_metrics_sidecar =
-            metrics_sidecar.map(|sidecar| Arc::new(std::sync::Mutex::new(Some(sidecar))));
         let entry = ProcessEntry {
             process: Arc::clone(&process),
-            plugin_metrics_sidecar: plugin_metrics_sidecar.clone(),
             call_id: context.call_id.clone(),
             process_id,
             cwd: cwd.clone(),
@@ -1044,7 +996,6 @@ impl UnifiedExecProcessManager {
             transcript,
             started_at,
             network_denial_monitor,
-            plugin_metrics_sidecar,
         );
     }
 
@@ -1230,15 +1181,13 @@ impl UnifiedExecProcessManager {
         inject_apply_patch_env(&mut env, &turn.config.features);
         let active_permission_profile = request.turn_environment.active_permission_profile();
         inject_permission_profile_env(&mut env, active_permission_profile.as_ref());
-        let mut env = apply_unified_exec_env(env);
-        strip_output_env(&mut env);
-        let mut explicit_env_overrides = turn
+        let env = apply_unified_exec_env(env);
+        let explicit_env_overrides = turn
             .config
             .permissions
             .shell_environment_policy
             .r#set
             .clone();
-        strip_output_env(&mut explicit_env_overrides);
         let exec_server_env_config = ExecServerEnvConfig {
             policy: exec_env_policy_from_shell_policy(
                 &turn.config.permissions.shell_environment_policy,

@@ -1629,11 +1629,8 @@ mod tests {
     use codex_exec_server_protocol::JSONRPCResponse;
     use codex_http_client::HttpClientFactory;
     use codex_http_client::OutboundProxyPolicy;
-    use codex_utils_path_uri::PathUri;
     use futures::SinkExt;
     use futures::StreamExt;
-    use opentelemetry::trace::TracerProvider as _;
-    use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     #[cfg(unix)]
@@ -1658,9 +1655,6 @@ mod tests {
     use tokio_tungstenite::WebSocketStream;
     use tokio_tungstenite::accept_async;
     use tokio_tungstenite::tungstenite::Message;
-    use tracing::Instrument;
-    use tracing_subscriber::filter::filter_fn;
-    use tracing_subscriber::prelude::*;
 
     use super::ExecServerClient;
     use super::ExecServerClientConnectOptions;
@@ -1677,7 +1671,6 @@ mod tests {
     use crate::process::ExecProcessEvent;
     use crate::protocol::EXEC_CLOSED_METHOD;
     use crate::protocol::EXEC_EXITED_METHOD;
-    use crate::protocol::EXEC_METHOD;
     use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
     use crate::protocol::EXEC_READ_METHOD;
     use crate::protocol::EXEC_WRITE_METHOD;
@@ -1685,13 +1678,10 @@ mod tests {
     use crate::protocol::ExecExitedNotification;
     use crate::protocol::ExecOutputDeltaNotification;
     use crate::protocol::ExecOutputStream;
-    use crate::protocol::ExecParams;
-    use crate::protocol::ExecResponse;
     use crate::protocol::INITIALIZE_METHOD;
     use crate::protocol::INITIALIZED_METHOD;
     use crate::protocol::InitializeResponse;
     use crate::protocol::ProcessOutputChunk;
-    use crate::protocol::ProcessSandboxType;
     use crate::protocol::ReadResponse;
     use crate::protocol::WriteParams;
     use crate::protocol::WriteResponse;
@@ -1718,124 +1708,6 @@ mod tests {
             .write_all(format!("{encoded}\n").as_bytes())
             .await
             .expect("json-rpc line should write");
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn process_start_propagates_caller_trace_context_across_background_task() {
-        let (client_stdin, server_reader) = duplex(1 << 20);
-        let (mut server_writer, client_stdout) = duplex(1 << 20);
-        let server = tokio::spawn(async move {
-            let mut lines = BufReader::new(server_reader).lines();
-            let initialize = read_jsonrpc_line(&mut lines).await;
-            let initialize = match initialize {
-                JSONRPCMessage::Request(request) if request.method == INITIALIZE_METHOD => request,
-                other => panic!("expected initialize request, got {other:?}"),
-            };
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Response(JSONRPCResponse {
-                    id: initialize.id,
-                    result: serde_json::to_value(InitializeResponse {
-                        session_id: "trace-test".to_string(),
-                    })
-                    .expect("initialize response should serialize"),
-                }),
-            )
-            .await;
-
-            match read_jsonrpc_line(&mut lines).await {
-                JSONRPCMessage::Notification(notification)
-                    if notification.method == INITIALIZED_METHOD => {}
-                other => panic!("expected initialized notification, got {other:?}"),
-            }
-
-            let request = match read_jsonrpc_line(&mut lines).await {
-                JSONRPCMessage::Request(request) if request.method == EXEC_METHOD => request,
-                other => panic!("expected process start request, got {other:?}"),
-            };
-            let trace = request.trace.clone();
-            let params: ExecParams =
-                serde_json::from_value(request.params.expect("process start params should exist"))
-                    .expect("process start params should deserialize");
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Response(JSONRPCResponse {
-                    id: request.id,
-                    result: serde_json::to_value(ExecResponse {
-                        process_id: params.process_id,
-                        sandbox_type: Some(ProcessSandboxType::LinuxSeccomp),
-                    })
-                    .expect("process start response should serialize"),
-                }),
-            )
-            .await;
-            trace
-        });
-
-        let client = ExecServerClient::connect(
-            JsonRpcConnection::from_stdio(
-                client_stdout,
-                client_stdin,
-                "trace-test-client".to_string(),
-            ),
-            ExecServerClientConnectOptions::default(),
-        )
-        .await
-        .expect("client should connect");
-
-        let tracer_provider = SdkTracerProvider::builder().build();
-        let tracer = tracer_provider.tracer("exec-server-test");
-        let subscriber = tracing_subscriber::registry().with(
-            tracing_opentelemetry::layer()
-                .with_tracer(tracer)
-                .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
-        );
-        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
-        tracing::callsite::rebuild_interest_cache();
-        let parent_span = tracing::info_span!("process-start-parent");
-        let expected_trace = codex_otel::span_w3c_trace_context(&parent_span)
-            .expect("parent span should have trace context");
-        let process_id = ProcessId::from("trace-process");
-
-        let session = client
-            .start_process(
-                ExecParams {
-                    process_id: process_id.clone(),
-                    argv: vec!["true".to_string()],
-                    cwd: PathUri::from_host_native_path(std::env::current_dir().expect("cwd"))
-                        .expect("cwd URI"),
-                    env_policy: None,
-                    env: HashMap::new(),
-                    tty: false,
-                    pipe_stdin: false,
-                    arg0: None,
-                    sandbox: None,
-                    enforce_managed_network: false,
-                    managed_network: None,
-                    network_proxy: None,
-                },
-                /*network_policy_decider*/ None,
-            )
-            .instrument(parent_span)
-            .await
-            .expect("process start should succeed");
-
-        assert_eq!(session.process_id(), &process_id);
-        assert_eq!(
-            session.sandbox_type(),
-            Some(ProcessSandboxType::LinuxSeccomp)
-        );
-        let trace = server.await.expect("server task").expect("trace context");
-        let expected_traceparent = expected_trace
-            .traceparent
-            .as_deref()
-            .expect("parent traceparent");
-        let traceparent = trace.traceparent.as_deref().expect("request traceparent");
-        let expected_parts = expected_traceparent.split('-').collect::<Vec<_>>();
-        let parts = traceparent.split('-').collect::<Vec<_>>();
-        assert_eq!(parts[1], expected_parts[1]);
-        assert_ne!(parts[2], expected_parts[2]);
-        assert_eq!(trace.tracestate, expected_trace.tracestate);
     }
 
     async fn accept_websocket(listener: &TcpListener) -> WebSocketStream<TcpStream> {

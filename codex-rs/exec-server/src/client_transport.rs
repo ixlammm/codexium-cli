@@ -34,7 +34,6 @@ use crate::noise_relay::NoiseHarnessConnectionArgs;
 use crate::noise_relay::noise_harness_connection_from_websocket;
 use crate::noise_relay::noise_relay_websocket_config;
 use crate::relay::harness_connection_from_websocket;
-use crate::trace_context::current_trace_context_headers;
 
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
 
@@ -335,16 +334,13 @@ impl ExecServerClient {
             .next()
             .unwrap_or(websocket_url.as_str())
             .to_string();
-        let mut request = websocket_url
+        let request = websocket_url
             .as_str()
             .into_client_request()
             .map_err(|source| ExecServerError::WebSocketConnect {
                 url: diagnostic_url.clone(),
                 source,
             })?;
-        request
-            .headers_mut()
-            .extend(current_trace_context_headers());
         let (stream, _) = timeout(
             connect_timeout,
             WebSocketConnector::new_with_tls_mode(

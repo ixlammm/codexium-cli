@@ -11,7 +11,6 @@ use codex_exec_server::SelectedCapabilityRootsStatus;
 use codex_extension_api::ThreadIdleCause;
 use codex_features::Feature;
 use codex_history::RolloutItem;
-use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
@@ -193,11 +192,6 @@ impl CodexThread {
 
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
         self.io.submit(op).await
-    }
-
-    /// Returns the session telemetry handle for thread-scoped production instrumentation.
-    pub fn session_telemetry(&self) -> SessionTelemetry {
-        self.session.services.session_telemetry.clone()
     }
 
     /// Returns extension-owned data attached to this thread runtime.

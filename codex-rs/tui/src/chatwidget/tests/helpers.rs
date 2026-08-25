@@ -120,23 +120,6 @@ pub(super) fn snapshot(percent: f64) -> RateLimitSnapshot {
     }
 }
 
-pub(super) fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
-    let model_info =
-        construct_model_info_offline_for_tests(model, &config.to_models_manager_config());
-    SessionTelemetry::new(
-        ThreadId::new(),
-        model,
-        model_info.slug.as_str(),
-        /*account_id*/ None,
-        /*account_email*/ None,
-        /*auth_mode*/ None,
-        "test_originator".to_string(),
-        /*log_user_prompts*/ false,
-        "test".to_string(),
-        crate::test_support::session_source_cli(),
-    )
-}
-
 pub(super) fn test_model_catalog(_config: &Config) -> Arc<ModelCatalog> {
     Arc::new(ModelCatalog::new(
         crate::test_support::TEST_MODEL_PRESETS.clone(),
@@ -180,7 +163,6 @@ pub(super) async fn make_chatwidget_manual_with_auth(
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
-    let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let model_catalog = test_model_catalog(&cfg);
     let common = ChatWidgetInit {
         config: cfg,
@@ -192,7 +174,6 @@ pub(super) async fn make_chatwidget_manual_with_auth(
         has_chatgpt_account,
         has_codex_backend_auth,
         model_catalog,
-        feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         status_account_display: None,
         runtime_model_provider_base_url: None,
@@ -201,7 +182,6 @@ pub(super) async fn make_chatwidget_manual_with_auth(
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
-        session_telemetry,
     };
     let mut widget = ChatWidget::new_with_op_target(common, super::CodexOpTarget::Direct(op_tx));
     widget.transcript.active_cell = None;

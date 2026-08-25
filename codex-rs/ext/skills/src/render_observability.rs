@@ -1,8 +1,4 @@
 use codex_extension_api::ExtensionMetrics;
-use codex_otel::THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC;
-use codex_otel::THREAD_SKILLS_ENABLED_TOTAL_METRIC;
-use codex_otel::THREAD_SKILLS_KEPT_TOTAL_METRIC;
-use codex_otel::THREAD_SKILLS_TRUNCATED_METRIC;
 
 use crate::render::SkillMetadataBudget;
 use crate::render::SkillRenderReport;
@@ -76,19 +72,19 @@ pub(crate) fn record_catalog_metrics(
     };
     let samples = [
         (
-            THREAD_SKILLS_ENABLED_TOTAL_METRIC,
+            "codex.thread.skills.enabled_total",
             i64::try_from(total_count).unwrap_or(i64::MAX),
         ),
         (
-            THREAD_SKILLS_KEPT_TOTAL_METRIC,
+            "codex.thread.skills.kept_total",
             i64::try_from(included_count).unwrap_or(i64::MAX),
         ),
         (
-            THREAD_SKILLS_TRUNCATED_METRIC,
+            "codex.thread.skills.truncated",
             if omitted_count > 0 { 1 } else { 0 },
         ),
         (
-            THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC,
+            "codex.thread.skills.description_truncated_chars",
             i64::try_from(truncated_description_chars).unwrap_or(i64::MAX),
         ),
     ];

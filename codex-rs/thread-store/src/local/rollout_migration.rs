@@ -47,7 +47,6 @@ mod rollback_plan;
 mod rollback_replay;
 mod startup;
 mod subagent;
-mod telemetry;
 
 use canonicalizer::LegacyRolloutCanonicalizer;
 use publish::compress_rollout_to_path;
@@ -64,8 +63,6 @@ use publish::sync_parent_directory;
 use publish::write_migration_journal;
 use rollback_plan::RollbackPlan;
 use rollback_plan::RollbackPlanner;
-use telemetry::RolloutMigrationTelemetry;
-use telemetry::RolloutMigrationTrigger;
 
 const PROJECTION_BATCH_BYTES: u64 = 256 * 1024;
 const MAX_ROLLOUT_LINE_BYTES: usize = 16 * 1024 * 1024;
@@ -225,40 +222,17 @@ impl LocalThreadStore {
         &self,
         options: RolloutMigrationOptions,
     ) -> ThreadStoreResult<RolloutMigrationReport> {
-        self.migrate_rollouts_with_progress_for_trigger(
-            options,
-            |_| {},
-            RolloutMigrationTrigger::Manual,
-        )
-        .await
+        self.migrate_rollouts_with_progress(options, |_| {}).await
     }
 
     /// Inspect or migrate rollouts while reporting each discovered path after it is processed.
     pub async fn migrate_rollouts_with_progress(
         &self,
         options: RolloutMigrationOptions,
-        on_progress: impl FnMut(RolloutMigrationProgress),
-    ) -> ThreadStoreResult<RolloutMigrationReport> {
-        self.migrate_rollouts_with_progress_for_trigger(
-            options,
-            on_progress,
-            RolloutMigrationTrigger::Manual,
-        )
-        .await
-    }
-
-    async fn migrate_rollouts_with_progress_for_trigger(
-        &self,
-        options: RolloutMigrationOptions,
         mut on_progress: impl FnMut(RolloutMigrationProgress),
-        trigger: RolloutMigrationTrigger,
     ) -> ThreadStoreResult<RolloutMigrationReport> {
-        let telemetry = RolloutMigrationTelemetry::new(trigger, &options);
-        let result = self
-            .migrate_rollouts_with_progress_inner(options, &mut on_progress)
-            .await;
-        telemetry.finish(&result);
-        result
+        self.migrate_rollouts_with_progress_inner(options, &mut on_progress)
+            .await
     }
 
     async fn migrate_rollouts_with_progress_inner(
