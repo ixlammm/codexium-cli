@@ -30,7 +30,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@23bdb251a0b7c6c0e6e3be0635e19cd88c0c0dcf # v2.7.8
+        uses: Swatinem/rust-cache@v2.7.8
         with:
           workspaces: codex-rs
 
@@ -67,7 +67,7 @@ jobs:
 
       - name: Upload release assets
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@c95e2b8b1c9b7d51a6c1f7b613f5f7c6cc0a2c64 # v2.1.0
+        uses: softprops/action-gh-release@v2.1.0
         with:
           files: staging/*
           name: ${{ github.ref_name }}
