@@ -52,8 +52,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/staging"
-          cp "codex-rs/target/debug/codex.exe" "$GITHUB_WORKSPACE/staging/codex-windows-dev.exe"
-          cp "codex-rs/target/release/codex.exe" "$GITHUB_WORKSPACE/staging/codex-windows-prod.exe"
+          cp "codex-rs/target/debug/codex.exe" "$GITHUB_WORKSPACE/staging/codex-dev.exe"
+          cp "codex-rs/target/release/codex.exe" "$GITHUB_WORKSPACE/staging/codex.exe"
 
       - name: Upload built executables as artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
