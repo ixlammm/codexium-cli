@@ -13,12 +13,8 @@ permissions:
 
 jobs:
   build-and-release:
-    name: Build on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+    name: Build (Windows)
+    runs-on: windows-latest
 
     steps:
       - name: Checkout
@@ -33,12 +29,6 @@ jobs:
         uses: Swatinem/rust-cache@v2.7.8
         with:
           workspaces: codex-rs
-
-      - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev bubblewrap
 
       - name: Build dev executable
         shell: bash
@@ -57,13 +47,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/staging"
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            cp "codex-rs/target/debug/codex.exe" "$GITHUB_WORKSPACE/staging/codex-${{ matrix.os }}-dev.exe"
-            cp "codex-rs/target/release/codex.exe" "$GITHUB_WORKSPACE/staging/codex-${{ matrix.os }}-prod.exe"
-          else
-            cp "codex-rs/target/debug/codex" "$GITHUB_WORKSPACE/staging/codex-${{ matrix.os }}-dev"
-            cp "codex-rs/target/release/codex" "$GITHUB_WORKSPACE/staging/codex-${{ matrix.os }}-prod"
-          fi
+          cp "codex-rs/target/debug/codex.exe" "$GITHUB_WORKSPACE/staging/codex-windows-dev.exe"
+          cp "codex-rs/target/release/codex.exe" "$GITHUB_WORKSPACE/staging/codex-windows-prod.exe"
 
       - name: Upload release assets
         if: startsWith(github.ref, 'refs/tags/')
