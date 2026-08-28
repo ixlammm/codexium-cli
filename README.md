@@ -78,4 +78,22 @@ You can also use Codex with an API key, but this requires [additional setup](htt
 - [**Installing & building**](./docs/install.md)
 - [**Open source fund**](./docs/open-source-fund.md)
 
+## Repo changes (codexium-cli fork)
+
+This fork of Codex CLI additionally includes the following changes:
+
+### CI / Release automation
+- Added a **Windows-only** build & release workflow: `.github/workflows/build-and-release.yml`.
+  - Triggered by pushes to `test-**` branches, pushes to `v*` tags, and manual `workflow_dispatch`.
+  - Builds two executables from the `codex-rs` workspace:
+    - **dev** — `cargo build` (debug) → `codex-dev.exe`
+    - **prod** — `cargo build --release` → `codex.exe`
+  - The build job always uploads the executables as a workflow artifact (`codex-windows-binaries`) so the (approximately 2 hour) output isn't lost.
+  - A separate `release` job (runs on tag pushes or manual dispatch with a `release_tag`) downloads that artifact and publishes it to a GitHub Release — **no rebuild required** to publish an already-built artifact.
+- **Disabled all other workflows** (via the GitHub Actions UI / `gh workflow disable`) except this one, so only the build-and-release workflow runs on this repo. The workflow files remain in the repo and can be re-enabled with `gh workflow enable <name>`.
+- **Disabled Dependabot version updates** by removing the `updates:` list from `.github/dependabot.yaml`. The file is kept so updates can be re-enabled by restoring that list.
+
+### Release history
+- Release tag convention in this fork is `v<original-version>-patched`. The first such release here is **`v0.144.0-patched`** (based on the `0.144.0` version referenced in `codex-rs/models-manager/models.json`).
+
 This repository is licensed under the [Apache-2.0 License](LICENSE).
